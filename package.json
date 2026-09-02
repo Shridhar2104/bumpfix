@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "tsx --test src/*.test.ts",
-    "mine": "tsx src/mine.ts"
+    "mine": "tsx src/mine.ts",
+    "validate": "tsx src/validate.ts"
   },
   "keywords": [],
   "author": "",
