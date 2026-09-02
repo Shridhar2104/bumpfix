@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { GitHub } from "./github.ts";
 import { classify, type Rejection } from "./filter.ts";
 import { TARGETS } from "./targets.ts";
+import { mineByRepo } from "./mine-repos.ts";
 import type { CorpusEntry, Target } from "./types.ts";
 
 /** How many entries any single repo may contribute — corpus diversity matters. */
@@ -106,6 +107,11 @@ async function mine(gh: GitHub, target: Target, want: number) {
 const args = process.argv.slice(2);
 const libArg = args.find((a) => !a.startsWith("-")) ?? "pydantic";
 const want = Number(args.find((a) => a.startsWith("--n="))?.slice(4) ?? 50);
+const strategy = args.find((a) => a.startsWith("--strategy="))?.slice(11) ?? "repo";
+if (strategy !== "repo" && strategy !== "message") {
+  console.error(`Unknown strategy "${strategy}". Use repo (default) or message.`);
+  process.exit(1);
+}
 
 const target = TARGETS[libArg];
 if (!target) {
@@ -135,9 +141,35 @@ if (limits.core.remaining < 20) {
   process.exit(1);
 }
 
-console.log(`\nMining ${target.name} v${target.fromMajor} → v${target.toMajor}, target ${want} cases`);
+console.log(
+  `\nMining ${target.name} v${target.fromMajor} → v${target.toMajor}, ` +
+    `target ${want} cases, strategy "${strategy}"`,
+);
 
-const { entries, scanned, rejected } = await mine(gh, target, want);
+let entries;
+let footer: string[];
+
+if (strategy === "repo") {
+  const res = await mineByRepo(gh, target, want);
+  entries = res.entries;
+  const { stats } = res;
+  const gated = Object.entries(stats.reposGated).sort((a, b) => b[1] - a[1]);
+  footer = [
+    `repos        ${stats.reposAccepted} passed the gate of ${stats.reposSeen} seen`,
+    `gated out    ${gated.map(([k, v]) => `${v} ${k}`).join(" · ") || "—"}`,
+    `scanned      ${stats.commitsScanned} commits`,
+    `rejected     ${stats.rejected.noSignal} no signal · ${stats.rejected.noCode} no code · ` +
+      `${stats.rejected.tooBig} too large · ${stats.rejected.merge} merges`,
+  ];
+} else {
+  const res = await mine(gh, target, want);
+  entries = res.entries;
+  footer = [
+    `scanned      ${res.scanned} commits`,
+    `rejected     ${res.rejected.noSignal} no signal · ${res.rejected.noCode} no code · ` +
+      `${res.rejected.tooBig} too large · ${res.rejected.merge} merges · ${res.rejected.repoCap} repo cap`,
+  ];
+}
 
 await mkdir("corpus", { recursive: true });
 const out = `corpus/${target.name}.jsonl`;
@@ -149,12 +181,17 @@ const median = sizes.length ? sizes[Math.floor(sizes.length / 2)] : 0;
 
 console.log(`\n${"─".repeat(56)}`);
 console.log(`corpus       ${entries.length} entries across ${repos} repos → ${out}`);
-console.log(`scanned      ${scanned} commits`);
-console.log(
-  `rejected     ${rejected.noSignal} no signal · ${rejected.noCode} no code · ` +
-    `${rejected.tooBig} too large · ${rejected.merge} merges · ${rejected.repoCap} repo cap`,
-);
+for (const line of footer) console.log(line);
 console.log(`median size  ${median} files changed`);
+
+const stars = entries.map((e) => e.repoQuality?.stars).filter((n): n is number => typeof n === "number");
+if (stars.length) {
+  const sorted = [...stars].sort((a, b) => a - b);
+  console.log(
+    `repo stars   median ★${sorted[Math.floor(sorted.length / 2)]} · ` +
+      `${entries.filter((e) => e.repoQuality?.hasCI).length}/${entries.length} with CI`,
+  );
+}
 
 const byEvidence = entries.reduce<Record<string, number>>((a, e) => ((a[e.evidence] = (a[e.evidence] ?? 0) + 1), a), {});
 console.log(`evidence     ${Object.entries(byEvidence).map(([k, v]) => `${v} ${k}`).join(" · ") || "—"}`);

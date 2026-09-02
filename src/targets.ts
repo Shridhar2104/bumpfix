@@ -37,6 +37,12 @@ export const TARGETS: Record<string, Target> = {
       { label: "basesettings", from: /from pydantic import[^\n]*BaseSettings/, to: /pydantic_settings/ }, // t2
       { label: "field_alias", from: /\bconst\s*=|\ballow_population_by_field_name/, to: /populate_by_name/ }, // t2
     ],
+    repoQueries: [
+      "fastapi language:python stars:>100 pushed:>2024-06-01",
+      "pydantic language:python stars:>80 pushed:>2024-06-01",
+      "language:python topic:fastapi stars:>100",
+      "langchain language:python stars:>100 pushed:>2024-06-01",
+    ],
   },
 
   sqlalchemy: {
@@ -59,6 +65,11 @@ export const TARGETS: Record<string, Target> = {
       { label: "session_get", from: /\.query\([^)]*\)\.get\(/, to: /session\.get\(/ },
       { label: "typing", from: /Column\(/, to: /mapped_column\(/ },
     ],
+    repoQueries: [
+      "sqlalchemy language:python stars:>80 pushed:>2024-06-01",
+      "flask sqlalchemy language:python stars:>100",
+      "language:python topic:sqlalchemy stars:>60",
+    ],
   },
 
   openai: {
@@ -79,6 +90,11 @@ export const TARGETS: Record<string, Target> = {
       { label: "client_object", from: /openai\.api_key\s*=/, to: /OpenAI\(/ },
       { label: "embeddings", from: /openai\.Embedding\.create/, to: /embeddings\.create/ },
       { label: "errors", from: /openai\.error\./, to: /openai\.(APIError|RateLimitError|APIStatusError)/ },
+    ],
+    repoQueries: [
+      "openai language:python stars:>100 pushed:>2024-06-01",
+      "language:python topic:openai stars:>80",
+      "llm agent language:python stars:>150 pushed:>2024-06-01",
     ],
   },
 };

@@ -16,6 +16,11 @@ export type Target = {
    * `to` is a migration even when the version bump landed in another commit.
    */
   markers: { label: string; from: RegExp; to: RegExp }[];
+  /**
+   * Repo-search queries for the repo-first strategy. Aim at projects that
+   * certainly depend on this library and plausibly have a maintained suite.
+   */
+  repoQueries: string[];
 };
 
 /** One changed file, as GitHub returns it. */
@@ -52,4 +57,13 @@ export type CorpusEntry = {
   /** Source changes — the part nobody automated. This is the label. */
   codeFiles: ChangedFile[];
   stats: { codeFiles: number; additions: number; deletions: number };
+  /** Present when mined repo-first; the signals that got this repo accepted. */
+  repoQuality?: {
+    stars: number;
+    pushedAt: string;
+    hasTests: boolean;
+    hasCI: boolean;
+    hasLockfile: boolean;
+    testFiles: number;
+  };
 };

@@ -2,6 +2,16 @@ import type { ChangedFile } from "./types.ts";
 
 const BASE = "https://api.github.com";
 
+export type RepoHit = {
+  full_name: string;
+  stargazers_count: number;
+  pushed_at: string;
+  fork: boolean;
+  archived: boolean;
+  default_branch: string;
+  size: number;
+};
+
 export type CommitHit = {
   sha: string;
   commit: { message: string; committer: { date: string } };
@@ -93,6 +103,34 @@ export class GitHub {
       order: "desc",
     });
     return data.items ?? [];
+  }
+
+  async searchRepos(q: string, page = 1): Promise<RepoHit[]> {
+    const data = await this.request<{ items: RepoHit[] }>("/search/repositories", {
+      q,
+      per_page: "100",
+      page: String(page),
+      sort: "stars",
+      order: "desc",
+    });
+    return data.items ?? [];
+  }
+
+  /**
+   * Every file path in the repo, in one core call. Cheap enough to gate on
+   * before spending a scarce search call, which is the whole point of the
+   * repo-first strategy.
+   */
+  async listPaths(repo: string, ref = "HEAD"): Promise<{ paths: string[]; truncated: boolean }> {
+    const data = await this.request<{
+      tree?: { path: string; type: string }[];
+      truncated?: boolean;
+    }>(`/repos/${repo}/git/trees/${ref}`, { recursive: "1" });
+    if (this.coreRemaining !== null) this.coreRemaining--;
+    return {
+      paths: (data.tree ?? []).filter((n) => n.type === "blob").map((n) => n.path),
+      truncated: Boolean(data.truncated),
+    };
   }
 
   async getCommit(repo: string, sha: string) {
