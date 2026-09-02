@@ -80,25 +80,107 @@ async function detectPython(dir: string): Promise<string> {
   return DEFAULT_PYTHON;
 }
 
-type Installer = { label: string; args: string[] };
+type Installer = { label: string; steps: string[][] };
 
-/** How this project declares dependencies, in order of preference. */
+/**
+ * Group names that conventionally carry test dependencies, best first.
+ * Projects almost never put pytest in runtime deps, so installing only the
+ * runtime set leaves every suite erroring on import — which is exactly how a
+ * healthy repo gets mis-recorded as "red at parent".
+ */
+const TEST_GROUPS = ["test", "tests", "dev", "testing", "develop", "all", "standard"];
+
+/**
+ * Poetry declares groups as `[tool.poetry.group.<name>.dependencies]`, which is
+ * neither a PEP 621 extra nor a PEP 735 group, so uv cannot install it from the
+ * manifest. Pull the package names out and install them unpinned — we need
+ * pytest and its plugins present, not the project's exact resolution.
+ */
+function poetryGroupDeps(text: string): string[] {
+  for (const group of TEST_GROUPS) {
+    const keys = tableKeys(text, `tool\\.poetry\\.group\\.${group}\\.dependencies`);
+    if (keys.length) return keys.filter((k) => k !== "python");
+  }
+  return [];
+}
+
+/**
+ * Keys of a TOML table, read without a TOML parser.
+ *
+ * The leading whitespace class is `[ \t]*`, not `\s*`: `\s` matches newlines,
+ * so with the `m` flag the match would start on a preceding blank line and the
+ * header would survive the slice below, silently yielding no keys.
+ */
+export function tableKeys(text: string, header: string): string[] {
+  const start = text.search(new RegExp(`^[ \\t]*\\[${header}\\]`, "m"));
+  if (start === -1) return [];
+  const rest = text.slice(start).split("\n").slice(1);
+  const keys: string[] = [];
+  for (const line of rest) {
+    if (/^[ \t]*\[/.test(line)) break;
+    const m = line.match(/^[ \t]*["']?([A-Za-z][\w.-]*)["']?[ \t]*=/);
+    if (m) keys.push(m[1]);
+  }
+  return keys;
+}
+
+const pickGroup = (groups: string[]) =>
+  TEST_GROUPS.find((g) => groups.includes(g)) ?? null;
+
+/** How this project declares dependencies, including its test extras. */
 async function detectInstaller(dir: string): Promise<Installer | null> {
   const has = (f: string) => existsSync(join(dir, f));
+  const steps: string[][] = [];
+  const labels: string[] = [];
 
-  const reqNames = ["requirements.txt", "requirements/base.txt", "requirements/dev.txt", "requirements-dev.txt"];
-  const reqs = reqNames.filter(has);
+  const mainReqs = ["requirements.txt", "requirements/base.txt", "requirements/main.txt"].filter(has);
+  const testReqs = [
+    "requirements-dev.txt", "requirements-test.txt", "requirements-tests.txt",
+    "requirements/dev.txt", "requirements/test.txt", "requirements/tests.txt",
+    "test-requirements.txt", "dev-requirements.txt",
+  ].filter(has);
 
   if (has("pyproject.toml")) {
     const text = await readFile(join(dir, "pyproject.toml"), "utf8");
     const isPep621 = /^\s*\[project\]/m.test(text);
     const isPoetry = /^\s*\[tool\.poetry\]/m.test(text);
-    if (isPep621) return { label: "pyproject", args: ["pip", "install", "."] };
-    if (isPoetry && !reqs.length) return { label: "poetry", args: ["pip", "install", "."] };
+
+    if (isPep621 || isPoetry) {
+      const extra = pickGroup(tableKeys(text, "project\\.optional-dependencies"));
+      steps.push(["pip", "install", extra ? `.[${extra}]` : "."]);
+      labels.push(extra ? `pyproject[${extra}]` : "pyproject");
+
+      // PEP 735 dependency groups are separate from extras and often hold pytest.
+      const group = pickGroup(tableKeys(text, "dependency-groups"));
+      if (group) {
+        steps.push(["pip", "install", "--group", group]);
+        labels.push(`group:${group}`);
+      }
+
+      const poetryDeps = poetryGroupDeps(text);
+      if (poetryDeps.length) {
+        steps.push(["pip", "install", ...poetryDeps]);
+        labels.push(`poetry-group(${poetryDeps.length})`);
+      }
+    }
   }
-  if (reqs.length) return { label: reqs[0], args: ["pip", "install", "-r", reqs[0]] };
-  if (has("setup.py") || has("setup.cfg")) return { label: "setup.py", args: ["pip", "install", "."] };
-  return null;
+
+  if (!steps.length && mainReqs.length) {
+    steps.push(["pip", "install", "-r", mainReqs[0]]);
+    labels.push(mainReqs[0]);
+  }
+  if (!steps.length && (has("setup.py") || has("setup.cfg"))) {
+    steps.push(["pip", "install", "."]);
+    labels.push("setup.py");
+  }
+  if (!steps.length) return null;
+
+  for (const f of testReqs.slice(0, 2)) {
+    steps.push(["pip", "install", "-r", f]);
+    labels.push(f);
+  }
+
+  return { label: labels.join(" + "), steps };
 }
 
 /** Does this repo contain anything pytest could collect? */
@@ -137,7 +219,15 @@ async function runTests(dir: string, venv: string): Promise<TestResult> {
   const py = join(venv, "bin", "python");
   const r = await run(
     py,
-    ["-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider", "-x", "--maxfail", "20"],
+    [
+      "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider", "--maxfail=20",
+      // Many projects set filterwarnings=error. We check out a 2024 commit but
+      // install today's transitive deps, which emit warnings that did not exist
+      // then — so collection dies before a test runs. We are measuring whether
+      // the code works, not whether a repo's warning policy survives newer
+      // dependencies, so blank the filters for probing.
+      "--override-ini=filterwarnings=",
+    ],
     { cwd: dir, timeoutMs: TEST_MS, env: { PYTHONDONTWRITEBYTECODE: "1", CI: "1" } },
   );
   const out = r.stdout + "\n" + r.stderr;
@@ -182,23 +272,26 @@ export async function probeCase(repo: string, sha: string): Promise<CaseProbe> {
       return done({ stage: "install", ok: false, reason: `venv ${python}: ${tail(r.stderr, 2)}`, python, installer: installer.label });
     }
 
-    r = await run("uv", installer.args, {
-      cwd: dir,
-      timeoutMs: INSTALL_MS,
-      env: { VIRTUAL_ENV: venv, UV_PROJECT_ENVIRONMENT: venv },
-    });
-    if (!r.ok) {
-      return done({
-        stage: "install",
-        ok: false,
-        reason: r.timedOut ? "install timed out" : tail(r.stderr, 3),
-        python,
-        installer: installer.label,
+    for (const [i, args] of installer.steps.entries()) {
+      r = await run("uv", args, {
+        cwd: dir,
+        timeoutMs: INSTALL_MS,
+        env: { VIRTUAL_ENV: venv, UV_PROJECT_ENVIRONMENT: venv },
       });
+      // Only the first step is load-bearing; extras groups are best-effort.
+      if (!r.ok && i === 0) {
+        return done({
+          stage: "install",
+          ok: false,
+          reason: r.timedOut ? "install timed out" : tail(r.stderr, 3),
+          python,
+          installer: installer.label,
+        });
+      }
     }
 
     // pytest itself is often only a dev-extra; install it explicitly.
-    await run("uv", ["pip", "install", "pytest"], {
+    await run("uv", ["pip", "install", "pytest", "pytest-asyncio", "anyio"], {
       cwd: dir,
       timeoutMs: 180_000,
       env: { VIRTUAL_ENV: venv, UV_PROJECT_ENVIRONMENT: venv },
@@ -216,6 +309,11 @@ export async function probeCase(repo: string, sha: string): Promise<CaseProbe> {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+/** Drop cached wheels that nothing currently references. */
+export async function pruneCache() {
+  await run("uv", ["cache", "prune"], { timeoutMs: 180_000 });
 }
 
 /** Free bytes on the volume holding the workspace root. */

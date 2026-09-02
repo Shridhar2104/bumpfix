@@ -68,3 +68,44 @@ test("cheap gates run before any extra API call", () => {
   assert.equal(rejectFromSearch(repo({ fork: true })), "fork");
   assert.equal(rejectFromPaths(assessPaths(GOOD)), null);
 });
+
+import { tableKeys } from "./sandbox.ts";
+
+const PYPROJECT = `[project]
+name = "widget"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+docs = ["mkdocs"]
+
+[tool.pytest.ini_options]
+filterwarnings = ["error"]
+`;
+
+test("reads optional-dependency groups across a blank line", () => {
+  // Regression: `\s*` matched the preceding newline, so the header survived the
+  // slice and the scan stopped immediately, returning no groups at all.
+  assert.deepEqual(tableKeys(PYPROJECT, "project\\.optional-dependencies"), ["dev", "docs"]);
+});
+
+test("stops at the next table rather than bleeding into it", () => {
+  assert.deepEqual(tableKeys(PYPROJECT, "tool\\.pytest\\.ini_options"), ["filterwarnings"]);
+});
+
+test("returns nothing for an absent table", () => {
+  assert.deepEqual(tableKeys(PYPROJECT, "dependency-groups"), []);
+});
+
+test("reads poetry-style dependency groups", () => {
+  const poetry = `[tool.poetry]
+name = "widget"
+
+[tool.poetry.group.dev.dependencies]
+python = "^3.11"
+pytest = "^8.0"
+pytest-asyncio = "^0.23"
+`;
+  assert.deepEqual(tableKeys(poetry, "tool\\.poetry\\.group\\.dev\\.dependencies"), [
+    "python", "pytest", "pytest-asyncio",
+  ]);
+});

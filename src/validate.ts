@@ -1,5 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { freeDiskGB, probeCase, type CaseProbe } from "./sandbox.ts";
+import { freeDiskGB, probeCase, pruneCache, type CaseProbe } from "./sandbox.ts";
 import type { CorpusEntry } from "./types.ts";
 
 /** Below this the workspaces stop fitting and installs fail confusingly. */
@@ -41,7 +41,22 @@ const cases = corpus.slice(0, limit);
 console.log(`probing ${cases.length} of ${corpus.length} ${lib} cases at their parent commit\n`);
 
 let completed = 0;
+let halted = false;
+
 const results = await pool(cases, CONCURRENCY, async (entry) => {
+  // uv's wheel cache grows unbounded across a batch — several GB over a few
+  // dozen repos — so reclaim it rather than dying halfway through a long run.
+  if (!halted && (await freeDiskGB()) < MIN_FREE_GB) {
+    await pruneCache();
+    if ((await freeDiskGB()) < MIN_FREE_GB) {
+      halted = true;
+      console.warn(`\nOut of disk after ${completed} cases — stopping early.`);
+    }
+  }
+  if (halted) {
+    return { ...entry, probe: { stage: "detect", ok: false, reason: "skipped, low disk", ms: 0 } } as Validated;
+  }
+
   const probe = await probeCase(entry.repo, entry.parentSha);
   completed++;
   const mark = probe.ok ? "✓" : "·";
@@ -55,6 +70,26 @@ const results = await pool(cases, CONCURRENCY, async (entry) => {
 });
 
 const runnable = results.filter((r) => r.probe.ok);
+
+// Record why each probe failed. Without this a systematic harness bug looks
+// exactly like a bad corpus, and diagnosing it means re-running by hand.
+const failures = results.filter((r) => !r.probe.ok);
+if (failures.length) {
+  const log = failures
+    .map((r) =>
+      [
+        `### ${r.repo} @ ${r.parentSha.slice(0, 10)}`,
+        `stage      ${r.probe.stage}`,
+        `reason     ${r.probe.reason ?? "-"}`,
+        `python     ${r.probe.python ?? "-"}`,
+        `installer  ${r.probe.installer ?? "-"}`,
+        r.probe.test ? `counts     ${JSON.stringify(r.probe.test.counts)}` : "",
+        r.probe.test?.output ? `\n${r.probe.test.output}` : "",
+      ].filter(Boolean).join("\n"),
+    )
+    .join("\n\n" + "─".repeat(70) + "\n\n");
+  await writeFile(`corpus/${lib}.probe-failures.log`, log + "\n");
+}
 const out = `corpus/${lib}.runnable.jsonl`;
 await writeFile(out, runnable.map((e) => JSON.stringify(e)).join("\n") + (runnable.length ? "\n" : ""));
 
@@ -76,3 +111,4 @@ console.log(
   `markers      ${Object.entries(markerCount(runnable)).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}:${v}`).join(" · ") || "—"}`,
 );
 console.log(`wall time    ${(results.reduce((n, r) => n + r.probe.ms, 0) / 1000 / 60).toFixed(1)} min of probe work`);
+if (failures.length) console.log(`diagnostics  corpus/${lib}.probe-failures.log`);
