@@ -31,9 +31,36 @@ const TEST_FILE = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py)$/i;
 
 const isTestFile = (p: string) => TEST_PATH.test(p) || TEST_FILE.test(p);
 
+/**
+ * Build output the agent's own test runs leave behind. Repos without a
+ * .gitignore surface these in `git diff`, and committing bytecode into a
+ * customer's PR is an instant credibility loss.
+ */
+const ARTIFACT =
+  /(^|\/)(__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.tox|node_modules|\.venv|venv|[^/]*\.egg-info)\/|\.py[co]$|(^|\/)\.DS_Store$/i;
+
+/**
+ * Everything the agent touched, including files it created. `git diff` alone
+ * reports only tracked edits, so a new module would be dropped from the commit
+ * and the pushed branch would not build.
+ */
 async function changedFiles(cwd: string): Promise<string[]> {
-  const r = await run("git", ["diff", "--name-only"], { cwd, timeoutMs: 30_000 });
-  return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
+  const r = await run("git", ["status", "--porcelain", "--untracked-files=all"], {
+    cwd,
+    timeoutMs: 30_000,
+  });
+  return r.stdout
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const path = line.slice(3).trim();
+      // Renames appear as "R  old -> new"; the new path is what we commit.
+      const arrow = path.indexOf(" -> ");
+      return arrow === -1 ? path : path.slice(arrow + 4);
+    })
+    .map((p) => p.replace(/^"|"$/g, ""))
+    .filter(Boolean)
+    .filter((p) => !ARTIFACT.test(p));
 }
 
 function buildPrompt(req: FixRequest, failures: string): string {

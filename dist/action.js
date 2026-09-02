@@ -32107,9 +32107,17 @@ ${r.stderr}`.match(/(\d+) tests? collected/);
 var TEST_PATH = /(^|\/)(tests?|testing)\//i;
 var TEST_FILE = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py)$/i;
 var isTestFile = (p) => TEST_PATH.test(p) || TEST_FILE.test(p);
+var ARTIFACT = /(^|\/)(__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.tox|node_modules|\.venv|venv|[^/]*\.egg-info)\/|\.py[co]$|(^|\/)\.DS_Store$/i;
 async function changedFiles(cwd) {
-  const r = await run("git", ["diff", "--name-only"], { cwd, timeoutMs: 3e4 });
-  return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
+  const r = await run("git", ["status", "--porcelain", "--untracked-files=all"], {
+    cwd,
+    timeoutMs: 3e4
+  });
+  return r.stdout.split("\n").filter(Boolean).map((line) => {
+    const path = line.slice(3).trim();
+    const arrow = path.indexOf(" -> ");
+    return arrow === -1 ? path : path.slice(arrow + 4);
+  }).map((p) => p.replace(/^"|"$/g, "")).filter(Boolean).filter((p) => !ARTIFACT.test(p));
 }
 function buildPrompt(req2, failures) {
   const version = req2.fromVersion && req2.toVersion ? `${req2.library} ${req2.fromVersion} \u2192 ${req2.toVersion}` : `${req2.library} (major version upgrade)`;
@@ -32275,27 +32283,8 @@ ${outcome.reason}
 
 Verified: the existing test suite passes and no test files were modified.`
 ]);
-if (token && repo) {
-  const url = `https://x-access-token:${token}@github.com/${repo}.git`;
-  const push = await git(["push", url, `HEAD:${branch}`]);
-  if (!push.ok) {
-    await summary(`### greenbump
-
-Fix verified but push failed:
-
-\`\`\`
-${push.stderr.slice(-500)}
-\`\`\``);
-    process.exit(0);
-  }
-} else {
-  await summary(`### greenbump
-
-Fix verified on local branch \`${branch}\`, but no token was available to push.`);
-  process.exit(0);
-}
-await summary(
-  `### greenbump \u2014 fix ready \u2705
+var report = (headline, footer) => summary(
+  `### greenbump \u2014 ${headline}
 
 **${req.library}${req.toVersion ? ` \u2192 ${req.toVersion}` : ""}** \xB7 ${outcome.reason}
 
@@ -32304,11 +32293,24 @@ await summary(
 | Branch | \`${branch}\` |
 | Tests before | ${outcome.before.counts.failed} failed, ${outcome.before.counts.passed} passed |
 | Tests after | ${outcome.after?.counts.passed ?? 0} passed |
-| Files changed | ${outcome.filesChanged.length} |
+| Files changed | ${outcome.filesChanged.join(", ")} |
 | Cost | ${cost} over ${outcome.turns} turns |
 
-Open a pull request from \`${branch}\` to review the diff.`
+${footer}`
 );
+if (!token || !repo) {
+  await report("fix verified, not pushed", `No token available, so the fix stayed on local branch \`${branch}\`.`);
+  process.exit(0);
+}
+var url = `https://x-access-token:${token}@github.com/${repo}.git`;
+var push = await git(["push", url, `HEAD:${branch}`]);
+if (!push.ok) {
+  await report("fix verified, push failed", `\`\`\`
+${push.stderr.slice(-400)}
+\`\`\``);
+  process.exit(0);
+}
+await report("fix ready \u2705", `Open a pull request from \`${branch}\` to review the diff.`);
 /*! Bundled license information:
 
 @anthropic-ai/claude-agent-sdk/sdk.mjs:

@@ -78,26 +78,29 @@ await git([
     `${outcome.reason}\n\nVerified: the existing test suite passes and no test files were modified.`,
 ]);
 
-if (token && repo) {
-  const url = `https://x-access-token:${token}@github.com/${repo}.git`;
-  const push = await git(["push", url, `HEAD:${branch}`]);
-  if (!push.ok) {
-    await summary(`### greenbump\n\nFix verified but push failed:\n\n\`\`\`\n${push.stderr.slice(-500)}\n\`\`\``);
-    process.exit(0);
-  }
-} else {
-  await summary(`### greenbump\n\nFix verified on local branch \`${branch}\`, but no token was available to push.`);
+// Built once so every exit path reports the same numbers.
+const report = (headline: string, footer: string) =>
+  summary(
+    `### greenbump — ${headline}\n\n` +
+      `**${req.library}${req.toVersion ? ` → ${req.toVersion}` : ""}** · ${outcome.reason}\n\n` +
+      `| | |\n|---|---|\n` +
+      `| Branch | \`${branch}\` |\n` +
+      `| Tests before | ${outcome.before.counts.failed} failed, ${outcome.before.counts.passed} passed |\n` +
+      `| Tests after | ${outcome.after?.counts.passed ?? 0} passed |\n` +
+      `| Files changed | ${outcome.filesChanged.join(", ")} |\n` +
+      `| Cost | ${cost} over ${outcome.turns} turns |\n\n${footer}`,
+  );
+
+if (!token || !repo) {
+  await report("fix verified, not pushed", `No token available, so the fix stayed on local branch \`${branch}\`.`);
   process.exit(0);
 }
 
-await summary(
-  `### greenbump — fix ready ✅\n\n` +
-    `**${req.library}${req.toVersion ? ` → ${req.toVersion}` : ""}** · ${outcome.reason}\n\n` +
-    `| | |\n|---|---|\n` +
-    `| Branch | \`${branch}\` |\n` +
-    `| Tests before | ${outcome.before.counts.failed} failed, ${outcome.before.counts.passed} passed |\n` +
-    `| Tests after | ${outcome.after?.counts.passed ?? 0} passed |\n` +
-    `| Files changed | ${outcome.filesChanged.length} |\n` +
-    `| Cost | ${cost} over ${outcome.turns} turns |\n\n` +
-    `Open a pull request from \`${branch}\` to review the diff.`,
-);
+const url = `https://x-access-token:${token}@github.com/${repo}.git`;
+const push = await git(["push", url, `HEAD:${branch}`]);
+if (!push.ok) {
+  await report("fix verified, push failed", `\`\`\`\n${push.stderr.slice(-400)}\n\`\`\``);
+  process.exit(0);
+}
+
+await report("fix ready ✅", `Open a pull request from \`${branch}\` to review the diff.`);
