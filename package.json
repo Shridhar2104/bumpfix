@@ -1,12 +1,15 @@
 {
-  "name": "my-agents",
+  "name": "greenbump",
   "version": "1.0.0",
-  "description": "Agents for automating dependency breaking-change migrations",
+  "description": "Fixes your code when a dependency major-version bump breaks the build",
   "main": "index.js",
   "scripts": {
     "test": "tsx --test src/*.test.ts",
     "mine": "tsx src/mine.ts",
-    "validate": "tsx src/validate.ts"
+    "validate": "tsx src/validate.ts",
+    "fix": "tsx src/action.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "esbuild src/action.ts --bundle --platform=node --target=node20 --format=esm --outfile=dist/action.js --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\""
   },
   "keywords": [],
   "author": "",
@@ -16,6 +19,9 @@
     "@anthropic-ai/claude-agent-sdk": "^0.3.252"
   },
   "devDependencies": {
-    "tsx": "^4.23.13"
+    "@types/node": "^26.4.1",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
   }
 }
