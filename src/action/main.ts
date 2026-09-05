@@ -1,6 +1,18 @@
 import { appendFile } from "node:fs/promises";
 import { attemptFix } from "../core/agent.ts";
+import { detectMajorBumps, type DetectedBump } from "../core/detect.ts";
 import { run } from "../core/exec.ts";
+import {
+  renderSummary,
+  totalCost,
+  writeOutcomeFile,
+  type AttemptOutcome,
+  type DeliveryOutcome,
+  type OutcomeRecord,
+} from "../core/outcome.ts";
+import { buildCommentBody, postComment } from "./comment.ts";
+import { loadPrContext } from "./context.ts";
+import { choosePushTarget, commitFix, push, remoteHead } from "./deliver.ts";
 
 /**
  * GitHub Action entry point.
@@ -21,86 +33,218 @@ async function summary(md: string) {
   console.log(md.replace(/[#*`]/g, ""));
 }
 
-const library = input("library");
-if (!library) {
-  console.error("greenbump: `library` input is required (e.g. pydantic)");
-  process.exit(0);
-}
-
-const req = {
-  cwd: input("working-directory", process.env.GITHUB_WORKSPACE || process.cwd()),
-  library,
-  fromVersion: input("from-version") || undefined,
-  toVersion: input("to-version") || undefined,
-  python: input("python", "python"),
-  maxBudgetUsd: Number(input("max-cost-usd", "3")),
-  maxTurns: Number(input("max-turns", "40")),
-};
-
-console.log(`greenbump · ${req.library} · budget $${req.maxBudgetUsd} · max ${req.maxTurns} turns`);
-
-let outcome;
-try {
-  outcome = await attemptFix(req);
-} catch (err) {
-  await summary(`### greenbump\n\nAttempt errored: ${(err as Error).message}\n\nYour build is unaffected.`);
-  process.exit(0);
-}
-
-const cost = `$${outcome.costUsd.toFixed(2)}`;
-
-if (!outcome.fixed) {
-  // Staying silent is a first-class outcome. Leave no branch, no PR, no noise.
-  await run("git", ["checkout", "--", "."], { cwd: req.cwd, timeoutMs: 60_000 });
-  await summary(
-    `### greenbump — no fix proposed\n\n` +
-      `${outcome.reason}\n\n` +
-      `Nothing was changed. Cost ${cost} across ${outcome.turns} turns.`,
-  );
-  process.exit(0);
-}
-
-// Only now, with a green suite and untouched tests, do we write anything.
-const branch = input("branch", `greenbump/${req.library}-${Date.now().toString(36)}`);
+const cwd = input("working-directory", process.env.GITHUB_WORKSPACE || process.cwd());
+const python = input("python", "python");
+const maxBudgetUsd = Number(input("max-cost-usd", "3"));
+const maxTurns = Number(input("max-turns", "40"));
 const token = process.env.GITHUB_TOKEN || input("github-token");
 const repo = process.env.GITHUB_REPOSITORY;
 
-const git = (args: string[]) => run("git", args, { cwd: req.cwd, timeoutMs: 120_000 });
+const git = (args: string[]) => run("git", args, { cwd, timeoutMs: 120_000 });
 
-await git(["config", "user.name", "greenbump"]);
-await git(["config", "user.email", "bot@greenbump.dev"]);
-await git(["checkout", "-b", branch]);
-await git(["add", "--", ...outcome.filesChanged]);
-await git([
-  "commit",
-  "-m",
-  `fix: update code for ${req.library} ${req.toVersion ?? "major upgrade"}\n\n` +
-    `${outcome.reason}\n\nVerified: the existing test suite passes and no test files were modified.`,
-]);
+const startedAt = new Date().toISOString();
+const pr = await loadPrContext();
 
-// Built once so every exit path reports the same numbers.
-const report = (headline: string, footer: string) =>
-  summary(
-    `### greenbump — ${headline}\n\n` +
-      `**${req.library}${req.toVersion ? ` → ${req.toVersion}` : ""}** · ${outcome.reason}\n\n` +
-      `| | |\n|---|---|\n` +
-      `| Branch | \`${branch}\` |\n` +
-      `| Tests before | ${outcome.before.counts.failed} failed, ${outcome.before.counts.passed} passed |\n` +
-      `| Tests after | ${outcome.after?.counts.passed ?? 0} passed |\n` +
-      `| Files changed | ${outcome.filesChanged.join(", ")} |\n` +
-      `| Cost | ${cost} over ${outcome.turns} turns |\n\n${footer}`,
-  );
+const MANIFEST_PATHSPECS = [
+  "requirements*.txt", "**/requirements*.txt",
+  "pyproject.toml", "**/pyproject.toml",
+  "poetry.lock", "**/poetry.lock",
+  "uv.lock", "**/uv.lock",
+  "Pipfile", "Pipfile.lock", "**/Pipfile", "**/Pipfile.lock",
+  "setup.py", "setup.cfg",
+];
+
+async function detectBumps(): Promise<DetectedBump[]> {
+  const override = input("library");
+  if (override) {
+    return [
+      {
+        library: override,
+        fromVersion: input("from-version") || undefined,
+        toVersion: input("to-version") || undefined,
+        manifest: "(library input)",
+      },
+    ];
+  }
+  if (!pr) return [];
+  await git(["fetch", "--quiet", "--depth=1", "origin", pr.baseSha]);
+  const diff = await git(["diff", pr.baseSha, "HEAD", "--", ...MANIFEST_PATHSPECS]);
+  return detectMajorBumps(diff.stdout);
+}
+
+const buildRecord = (
+  attempts: AttemptOutcome[],
+  detected: DetectedBump[],
+  delivery: DeliveryOutcome,
+): OutcomeRecord => ({
+  schema: 1,
+  repo,
+  pr: pr?.prNumber,
+  startedAt,
+  finishedAt: new Date().toISOString(),
+  detected,
+  attempts,
+  delivery,
+  totalCostUsd: totalCost(attempts),
+});
+
+async function finish(record: OutcomeRecord): Promise<never> {
+  await writeOutcomeFile(record).catch((err) => console.warn(`greenbump: outcome file: ${err.message}`));
+  await summary(renderSummary(record));
+  process.exit(0);
+}
+
+const NONE: DeliveryOutcome = { mode: "none", pushed: false, commented: false };
+
+let detected: DetectedBump[] = [];
+try {
+  detected = await detectBumps();
+} catch (err) {
+  console.warn(`greenbump: detection failed: ${(err as Error).message}`);
+}
+
+if (!detected.length) {
+  console.log("greenbump: no major-version bumps detected");
+  await finish(buildRecord([], [], NONE));
+}
+
+const checkoutSha = (await git(["rev-parse", "HEAD"])).stdout.trim();
+
+/** Untracked files present before we ran, so cleanup can spare them. */
+async function untracked(): Promise<Set<string>> {
+  const r = await git(["ls-files", "--others", "--exclude-standard"]);
+  return new Set(r.stdout.split("\n").filter(Boolean));
+}
+const baselineUntracked = await untracked();
+
+/** Drop everything a failed attempt left behind before the next one starts. */
+async function revertWorkingTree() {
+  await git(["checkout", "--", "."]);
+  const created = [...(await untracked())].filter((f) => !baselineUntracked.has(f));
+  if (created.length) await git(["clean", "-fq", "--", ...created]);
+}
+
+const attempts: AttemptOutcome[] = [];
+const fixedLibraries: string[] = [];
+
+for (const bump of detected) {
+  const spent = totalCost(attempts);
+  const remaining = Math.round((maxBudgetUsd - spent) * 100) / 100;
+  const base = { library: bump.library, fromVersion: bump.fromVersion, toVersion: bump.toVersion };
+
+  if (remaining < 0.25) {
+    attempts.push({
+      ...base,
+      fixed: false,
+      reason: `skipped — $${spent.toFixed(2)} of the $${maxBudgetUsd} budget already spent`,
+      costUsd: 0,
+      turns: 0,
+      filesChanged: [],
+      durationMs: 0,
+    });
+    continue;
+  }
+
+  console.log(`greenbump · ${bump.library} · budget $${remaining} · max ${maxTurns} turns`);
+  const started = Date.now();
+  let committed = false;
+  try {
+    const out = await attemptFix({
+      cwd,
+      library: bump.library,
+      fromVersion: bump.fromVersion,
+      toVersion: bump.toVersion,
+      python,
+      maxBudgetUsd: remaining,
+      maxTurns,
+    });
+    attempts.push({
+      ...base,
+      fixed: out.fixed,
+      reason: out.reason,
+      costUsd: out.costUsd,
+      turns: out.turns,
+      testsBefore: out.before.counts,
+      testsAfter: out.after?.counts,
+      filesChanged: out.filesChanged,
+      durationMs: Date.now() - started,
+    });
+
+    if (out.fixed) {
+      // Commit each verified fix immediately so a later failed attempt's
+      // cleanup cannot touch it.
+      committed = await commitFix(
+        cwd,
+        out.filesChanged,
+        `greenbump: migrate to ${bump.library} ${bump.toVersion ?? "major upgrade"}\n\n` +
+          `${out.reason}\n\nVerified: the existing test suite passes and no test files were modified.`,
+      );
+      if (committed) {
+        fixedLibraries.push(bump.library);
+      } else {
+        attempts[attempts.length - 1] = {
+          ...attempts[attempts.length - 1],
+          fixed: false,
+          reason: "fix verified but git commit failed",
+        };
+      }
+    }
+  } catch (err) {
+    attempts.push({
+      ...base,
+      fixed: false,
+      reason: `attempt errored: ${(err as Error).message}`,
+      costUsd: 0,
+      turns: 0,
+      filesChanged: [],
+      durationMs: Date.now() - started,
+    });
+  }
+  if (!committed) await revertWorkingTree();
+}
+
+if (!fixedLibraries.length) {
+  await finish(buildRecord(attempts, detected, NONE));
+}
+
+const fallbackBranch = input(
+  "branch",
+  `greenbump/${fixedLibraries.join("-")}-${Date.now().toString(36)}`,
+);
 
 if (!token || !repo) {
-  await report("fix verified, not pushed", `No token available, so the fix stayed on local branch \`${branch}\`.`);
-  process.exit(0);
+  await git(["branch", fallbackBranch]);
+  await finish(
+    buildRecord(attempts, detected, {
+      mode: "local",
+      branch: fallbackBranch,
+      pushed: false,
+      commented: false,
+      note: "no token available",
+    }),
+  );
 }
 
 const url = `https://x-access-token:${token}@github.com/${repo}.git`;
-const push = await git(["push", url, `HEAD:${branch}`]);
-if (!push.ok) {
-  await report("fix verified, push failed", `\`\`\`\n${push.stderr.slice(-400)}\n\`\`\``);
-  process.exit(0);
+const plan = choosePushTarget({
+  pr,
+  checkoutSha,
+  remoteHeadSha: pr ? await remoteHead(cwd, url, pr.headRef) : null,
+  fallbackBranch,
+});
+
+const pushed = await push(cwd, url, plan.branch);
+const delivery: DeliveryOutcome = {
+  mode: plan.mode,
+  branch: plan.branch,
+  pushed: pushed.ok,
+  commented: false,
+  note: pushed.ok ? plan.note : `push failed: ${pushed.stderr.slice(-300)}`,
+};
+
+if (pushed.ok && pr && token) {
+  const body = buildCommentBody(buildRecord(attempts, detected, delivery));
+  if (body) delivery.commented = await postComment(token, pr.repo, pr.prNumber, body);
 }
 
-await report("fix ready ✅", `Open a pull request from \`${branch}\` to review the diff.`);
+await finish(buildRecord(attempts, detected, delivery));
