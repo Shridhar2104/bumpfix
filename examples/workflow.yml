@@ -3,16 +3,31 @@ name: greenbump
 
 on:
   pull_request:
-    paths: [requirements.txt, pyproject.toml, poetry.lock]
+    paths:
+      - "requirements*.txt"
+      - "**/requirements*.txt"
+      - pyproject.toml
+      - "**/pyproject.toml"
+      - poetry.lock
+      - "**/poetry.lock"
+      - uv.lock
+      - "**/uv.lock"
+      - Pipfile.lock
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   fix:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Check out the PR branch itself (not the merge ref) so greenbump
+          # can push the verified fix onto this PR.
+          ref: ${{ github.head_ref }}
+
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
 
@@ -21,9 +36,7 @@ jobs:
       - run: pip install -r requirements.txt pytest
 
       - uses: Shridhar2104/greenbump@v1
-        with:
-          library: pydantic
-          to-version: "2"
-          max-cost-usd: "3"
         env:
+          # For Dependabot PRs this must also be added under
+          # Settings → Secrets → Dependabot.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
