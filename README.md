@@ -5,7 +5,7 @@ your code — in your own CI, verified against your own tests.**
 
 Dependabot opens a PR bumping `pydantic` to v2. Your suite goes red. A few
 minutes later a commit lands on that same PR migrating your code to the new
-API, and the checks rerun green. That's the whole product.
+API, ready for your checks to rerun green. That's the whole product.
 
 ## How it works
 
@@ -42,6 +42,15 @@ Add `.github/workflows/greenbump.yml` — see [examples/workflow.yml](examples/w
 **Dependabot note:** workflows triggered by Dependabot PRs read secrets from
 *Dependabot secrets*, not Actions secrets. Add `ANTHROPIC_API_KEY` under
 **Settings → Secrets and variables → Dependabot** too.
+
+**Don't use `pull_request_target`:** it checks out the PR head under a
+privileged context, which is a known way to hand a fork write access to your
+secrets. Use `pull_request` as shown above.
+
+**Re-running your checks:** a push made with the default `${{ github.token }}`
+does not re-trigger workflow runs — that's a GitHub anti-recursion guard, not
+a bug. After greenbump comments, re-run the failed checks manually, or set
+`github-token` to a PAT or GitHub App token to have them rerun automatically.
 
 ## Results
 

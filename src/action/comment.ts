@@ -18,7 +18,12 @@ export function buildCommentBody(record: OutcomeRecord): string | null {
 
   const d = record.delivery;
   if (d.mode === "pr-branch") {
-    lines.push("", "The fix was pushed to this branch — your checks should rerun green.");
+    lines.push(
+      "",
+      "The fix was pushed to this branch. Note: pushes made with the default " +
+        "`GITHUB_TOKEN` don't re-trigger workflows — re-run checks manually, or " +
+        "configure a PAT/App token in `github-token` to have them rerun automatically.",
+    );
   } else if (d.mode === "fix-branch" && d.branch) {
     lines.push("", `The fix was pushed to \`${d.branch}\` (${d.note ?? "in-place push was not possible"}).`);
   }
