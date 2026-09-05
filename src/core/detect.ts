@@ -19,6 +19,11 @@ export type DetectedBump = {
 const MANIFEST =
   /(^|\/)(requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile|Pipfile\.lock|setup\.py|setup\.cfg)$/;
 
+/** Lockfiles are the only files where a bare `name =` / `version =` pair means
+ *  a dependency entry — in every other manifest `version =` is the project's
+ *  own version field. */
+const LOCKFILE = /(^|\/)(poetry\.lock|uv\.lock)$/;
+
 /** PEP 503 normalisation so pydantic_settings and pydantic-settings dedupe. */
 const norm = (name: string) => name.toLowerCase().replace(/[-_.]+/g, "-");
 
@@ -51,6 +56,7 @@ export function detectMajorBumps(diff: string): DetectedBump[] {
   const byPkg = new Map<string, Sides>();
   let file = "";
   let inManifest = false;
+  let inLockfile = false;
   /** Package the current lockfile lines belong to, set by name= lines. */
   let lockContext = "";
 
@@ -69,6 +75,7 @@ export function detectMajorBumps(diff: string): DetectedBump[] {
     if (raw.startsWith("+++ ")) {
       file = raw.replace(/^\+\+\+ (b\/)?/, "").trim();
       inManifest = file !== "/dev/null" && MANIFEST.test(file);
+      inLockfile = inManifest && LOCKFILE.test(file);
       lockContext = "";
       continue;
     }
@@ -78,8 +85,10 @@ export function detectMajorBumps(diff: string): DetectedBump[] {
     if (sign !== "+" && sign !== "-" && sign !== " ") continue;
     const line = raw.slice(1).trim();
 
-    // name= lines set lockfile context whether changed or not.
-    const name = line.match(LOCK_NAME);
+    // name= lines set lockfile context whether changed or not — lockfile only,
+    // else a `name = "myproject"` line in pyproject.toml would attribute the
+    // project's own version bump to a fake "dependency" named after itself.
+    const name = inLockfile ? line.match(LOCK_NAME) : null;
     if (name) {
       lockContext = name[1];
       continue;
@@ -87,7 +96,7 @@ export function detectMajorBumps(diff: string): DetectedBump[] {
     if (sign === " ") continue;
 
     const side = sign === "-" ? "removed" : "added";
-    const lockVer = line.match(LOCK_VERSION);
+    const lockVer = inLockfile ? line.match(LOCK_VERSION) : null;
     if (lockVer && lockContext) {
       record(lockContext, lockVer[1], side);
       continue;

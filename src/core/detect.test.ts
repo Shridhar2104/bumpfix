@@ -80,6 +80,12 @@ test("ignores the project's own version field in pyproject.toml", () => {
   assert.deepEqual(bumps, []);
 });
 
+test("ignores the project's own version bump even with a name context line", () => {
+  const body = ' name = "myproject"\n-version = "1.4.0"\n+version = "2.0.0"\n';
+  const bumps = detectMajorBumps(diff("pyproject.toml", body));
+  assert.deepEqual(bumps, []);
+});
+
 test("ignores changes in non-manifest files", () => {
   const bumps = detectMajorBumps(diff("app/models.py", "-pydantic==1.0\n+pydantic==2.0\n"));
   assert.deepEqual(bumps, []);
