@@ -1,0 +1,29 @@
+# What a customer adds to their repo. This is the whole onboarding.
+name: greenbump
+
+on:
+  pull_request:
+    paths: [requirements.txt, pyproject.toml, poetry.lock]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+
+      # Your normal install step — greenbump reuses the environment your CI
+      # already knows how to build.
+      - run: pip install -r requirements.txt pytest
+
+      - uses: Shridhar2104/greenbump@v1
+        with:
+          library: pydantic
+          to-version: "2"
+          max-cost-usd: "3"
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
