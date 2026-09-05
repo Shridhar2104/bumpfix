@@ -57,8 +57,15 @@ a bug. After greenbump comments, re-run the failed checks manually, or set
 Measured on real-world open-source migrations mined from GitHub (each case is
 a repo whose suite was green before the bump and red after):
 
-<!-- EVAL_TABLE: filled from docs/evals/pydantic-v1-v2.md after the eval run -->
-See [docs/evals/](docs/evals/) for per-case results.
+On 13 pydantic v1 → v2 bumps mined from real GitHub repos: 5 didn't actually
+break the suite (greenbump correctly stayed silent), and of the **8 that
+broke, greenbump fixed 3 (38%)** — median cost **$2.04** per attempt, no test
+file touched, no unverified fix shipped. One miss was a fix rejected by the
+never-touch-tests guard, one hit the $3 budget ceiling; every miss was
+silent.
+
+See [docs/evals/pydantic-v1-v2.md](docs/evals/pydantic-v1-v2.md) for the
+per-case table with links to each real commit.
 
 ## Configuration
 
