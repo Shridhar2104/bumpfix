@@ -50,7 +50,7 @@ outputs:
   outcome-file:
     description: Path to a JSON record of everything greenbump did this run.
   fixed:
-    description: '"true" when a verified fix was committed and delivered.'
+    description: '"true" when a verified fix was committed.'
 
 runs:
   using: node20
