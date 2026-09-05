@@ -25,8 +25,9 @@ if (!target) {
   process.exit(1);
 }
 if (!process.env.ANTHROPIC_API_KEY) {
-  console.error("ANTHROPIC_API_KEY is required — eval attempts are real agent runs");
-  process.exit(1);
+  // The Agent SDK falls back to the local Claude Code login. Costs are then
+  // subscription quota, not API dollars — total_cost_usd is still reported.
+  console.warn("no ANTHROPIC_API_KEY — using the local Claude Code subscription login");
 }
 
 const raw = await readFile(`corpus/${lib}.runnable.jsonl`, "utf8");
