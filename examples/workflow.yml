@@ -15,6 +15,7 @@ on:
       - Pipfile
       - "**/Pipfile"
       - Pipfile.lock
+      - "**/Pipfile.lock"
       - setup.py
       - setup.cfg
 
