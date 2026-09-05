@@ -32223,6 +32223,7 @@ async function attemptFix(req) {
 
 // src/core/detect.ts
 var MANIFEST = /(^|\/)(requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile|Pipfile\.lock|setup\.py|setup\.cfg)$/;
+var LOCKFILE = /(^|\/)(poetry\.lock|uv\.lock)$/;
 var norm = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
 var IGNORE = /* @__PURE__ */ new Set(["version", "python", "python-version", "python-full-version", "name"]);
 var major = (v) => {
@@ -32238,6 +32239,7 @@ function detectMajorBumps(diff) {
   const byPkg = /* @__PURE__ */ new Map();
   let file = "";
   let inManifest = false;
+  let inLockfile = false;
   let lockContext = "";
   const record = (name, version, side) => {
     const key = norm(name);
@@ -32251,6 +32253,7 @@ function detectMajorBumps(diff) {
     if (raw.startsWith("+++ ")) {
       file = raw.replace(/^\+\+\+ (b\/)?/, "").trim();
       inManifest = file !== "/dev/null" && MANIFEST.test(file);
+      inLockfile = inManifest && LOCKFILE.test(file);
       lockContext = "";
       continue;
     }
@@ -32258,14 +32261,14 @@ function detectMajorBumps(diff) {
     const sign = raw[0];
     if (sign !== "+" && sign !== "-" && sign !== " ") continue;
     const line = raw.slice(1).trim();
-    const name = line.match(LOCK_NAME);
+    const name = inLockfile ? line.match(LOCK_NAME) : null;
     if (name) {
       lockContext = name[1];
       continue;
     }
     if (sign === " ") continue;
     const side = sign === "-" ? "removed" : "added";
-    const lockVer = line.match(LOCK_VERSION);
+    const lockVer = inLockfile ? line.match(LOCK_VERSION) : null;
     if (lockVer && lockContext) {
       record(lockContext, lockVer[1], side);
       continue;
@@ -32358,7 +32361,10 @@ function buildCommentBody(record) {
   }
   const d2 = record.delivery;
   if (d2.mode === "pr-branch") {
-    lines.push("", "The fix was pushed to this branch \u2014 your checks should rerun green.");
+    lines.push(
+      "",
+      "The fix was pushed to this branch. Note: pushes made with the default `GITHUB_TOKEN` don't re-trigger workflows \u2014 re-run checks manually, or configure a PAT/App token in `github-token` to have them rerun automatically."
+    );
   } else if (d2.mode === "fix-branch" && d2.branch) {
     lines.push("", `The fix was pushed to \`${d2.branch}\` (${d2.note ?? "in-place push was not possible"}).`);
   }
@@ -32467,8 +32473,10 @@ async function summary(md) {
 }
 var cwd = input("working-directory", process.env.GITHUB_WORKSPACE || process.cwd());
 var python = input("python", "python");
-var maxBudgetUsd = Number(input("max-cost-usd", "3"));
-var maxTurns = Number(input("max-turns", "40"));
+var parsedBudget = Number(input("max-cost-usd", "3"));
+var maxBudgetUsd = Number.isFinite(parsedBudget) && parsedBudget > 0 ? parsedBudget : 3;
+var parsedTurns = Number(input("max-turns", "40"));
+var maxTurns = Number.isInteger(parsedTurns) && parsedTurns > 0 ? parsedTurns : 40;
 var token = process.env.GITHUB_TOKEN || input("github-token");
 var repo = process.env.GITHUB_REPOSITORY;
 var git2 = (args) => run("git", args, { cwd, timeoutMs: 12e4 });
@@ -32647,14 +32655,28 @@ var plan = choosePushTarget({
   fallbackBranch
 });
 var pushed = await push(cwd, url, plan.branch);
-var delivery = {
-  mode: plan.mode,
-  branch: plan.branch,
-  pushed: pushed.ok,
-  commented: false,
-  note: pushed.ok ? plan.note : `push failed: ${pushed.stderr.slice(-300)}`
-};
-if (pushed.ok && pr2 && token) {
+var delivery;
+if (pushed.ok) {
+  delivery = { mode: plan.mode, branch: plan.branch, pushed: true, commented: false, note: plan.note };
+} else if (plan.mode === "pr-branch") {
+  const retry = await push(cwd, url, fallbackBranch);
+  delivery = retry.ok ? {
+    mode: "fix-branch",
+    branch: fallbackBranch,
+    pushed: true,
+    commented: false,
+    note: "the PR branch moved while greenbump was pushing the fix"
+  } : { mode: plan.mode, branch: plan.branch, pushed: false, commented: false, note: `push failed: ${pushed.stderr.slice(-300)}` };
+} else {
+  delivery = {
+    mode: plan.mode,
+    branch: plan.branch,
+    pushed: false,
+    commented: false,
+    note: `push failed: ${pushed.stderr.slice(-300)}`
+  };
+}
+if (delivery.pushed && pr2 && token) {
   const body = buildCommentBody(buildRecord(attempts, detected, delivery));
   if (body) delivery.commented = await postComment(token, pr2.repo, pr2.prNumber, body);
 }

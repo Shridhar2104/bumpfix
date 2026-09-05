@@ -41,8 +41,14 @@ async function summary(md: string) {
 
 const cwd = input("working-directory", process.env.GITHUB_WORKSPACE || process.cwd());
 const python = input("python", "python");
-const maxBudgetUsd = Number(input("max-cost-usd", "3"));
-const maxTurns = Number(input("max-turns", "40"));
+
+// Malformed numeric inputs must not silently defeat the budget cap.
+const parsedBudget = Number(input("max-cost-usd", "3"));
+const maxBudgetUsd = Number.isFinite(parsedBudget) && parsedBudget > 0 ? parsedBudget : 3;
+const parsedTurns = Number(input("max-turns", "40"));
+const maxTurns =
+  Number.isInteger(parsedTurns) && parsedTurns > 0 ? parsedTurns : 40;
+
 const token = process.env.GITHUB_TOKEN || input("github-token");
 const repo = process.env.GITHUB_REPOSITORY;
 
@@ -240,15 +246,35 @@ const plan = choosePushTarget({
 });
 
 const pushed = await push(cwd, url, plan.branch);
-const delivery: DeliveryOutcome = {
-  mode: plan.mode,
-  branch: plan.branch,
-  pushed: pushed.ok,
-  commented: false,
-  note: pushed.ok ? plan.note : `push failed: ${pushed.stderr.slice(-300)}`,
-};
+let delivery: DeliveryOutcome;
 
-if (pushed.ok && pr && token) {
+if (pushed.ok) {
+  delivery = { mode: plan.mode, branch: plan.branch, pushed: true, commented: false, note: plan.note };
+} else if (plan.mode === "pr-branch") {
+  // The PR branch can move between our ls-remote check and this push (someone
+  // else pushed in between), rejecting it as a non-fast-forward. Retry once
+  // against the fallback branch rather than losing an already-verified fix.
+  const retry = await push(cwd, url, fallbackBranch);
+  delivery = retry.ok
+    ? {
+        mode: "fix-branch",
+        branch: fallbackBranch,
+        pushed: true,
+        commented: false,
+        note: "the PR branch moved while greenbump was pushing the fix",
+      }
+    : { mode: plan.mode, branch: plan.branch, pushed: false, commented: false, note: `push failed: ${pushed.stderr.slice(-300)}` };
+} else {
+  delivery = {
+    mode: plan.mode,
+    branch: plan.branch,
+    pushed: false,
+    commented: false,
+    note: `push failed: ${pushed.stderr.slice(-300)}`,
+  };
+}
+
+if (delivery.pushed && pr && token) {
   const body = buildCommentBody(buildRecord(attempts, detected, delivery));
   if (body) delivery.commented = await postComment(token, pr.repo, pr.prNumber, body);
 }
