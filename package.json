@@ -7,6 +7,7 @@
     "test": "tsx --test src/eval/*.test.ts src/core/*.test.ts src/action/*.test.ts",
     "mine": "tsx src/eval/mine.ts",
     "validate": "tsx src/eval/validate.ts",
+    "eval": "tsx src/eval/run-eval.ts",
     "fix": "tsx src/action/main.ts",
     "typecheck": "tsc --noEmit",
     "build": "esbuild src/action/main.ts --bundle --platform=node --target=node20 --format=esm --outfile=dist/action.js --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\""
