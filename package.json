@@ -4,7 +4,7 @@
   "description": "Fixes your code when a dependency major-version bump breaks the build",
   "main": "index.js",
   "scripts": {
-    "test": "tsx --test src/eval/*.test.ts",
+    "test": "tsx --test src/eval/*.test.ts src/core/*.test.ts",
     "mine": "tsx src/eval/mine.ts",
     "validate": "tsx src/eval/validate.ts",
     "fix": "tsx src/action/main.ts",
