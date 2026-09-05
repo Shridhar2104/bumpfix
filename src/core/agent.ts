@@ -13,6 +13,8 @@ export type FixRequest = {
   /** Hard ceiling. The run is abandoned rather than allowed to exceed it. */
   maxBudgetUsd: number;
   maxTurns: number;
+  /** Extra pytest args, e.g. eval sandboxes blank warning filters. */
+  pytestArgs?: string[];
 };
 
 export type FixOutcome = {
@@ -115,7 +117,7 @@ a valid, useful outcome — shipping a wrong patch is not.`;
  * costs tokens and is never shown to a customer.
  */
 export async function attemptFix(req: FixRequest): Promise<FixOutcome> {
-  const testOpts = { cwd: req.cwd, python: req.python };
+  const testOpts = { cwd: req.cwd, python: req.python, args: req.pytestArgs };
 
   const before = await runPytest(testOpts);
   const base: Omit<FixOutcome, "fixed" | "reason"> = {

@@ -32094,7 +32094,7 @@ ${r.stderr}`;
 async function collectCount(opts) {
   const r = await run(
     opts.python ?? "python",
-    ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
+    ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", ...opts.args ?? []],
     { cwd: opts.cwd, timeoutMs: 12e4, env: { PYTHONDONTWRITEBYTECODE: "1", CI: "1" } }
   );
   const m = `${r.stdout}
@@ -32158,7 +32158,7 @@ If you genuinely cannot make the suite pass, stop and say so plainly. Stopping i
 a valid, useful outcome \u2014 shipping a wrong patch is not.`;
 }
 async function attemptFix(req) {
-  const testOpts = { cwd: req.cwd, python: req.python };
+  const testOpts = { cwd: req.cwd, python: req.python, args: req.pytestArgs };
   const before = await runPytest(testOpts);
   const base = {
     costUsd: 0,
