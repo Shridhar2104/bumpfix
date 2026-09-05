@@ -1,4 +1,5 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { attemptFix } from "../core/agent.ts";
 import { run, tail } from "../core/exec.ts";
 import { prepareCase, venvEnv } from "./sandbox.ts";
@@ -51,19 +52,32 @@ type CaseResult = {
 /** Outcomes that say the case could not test the engine, not that it failed. */
 const SKIP_REASONS = ["suite already green", "no tests collected"];
 
-const results: CaseResult[] = [];
+/**
+ * Every finished case is appended here immediately, and completed ids are
+ * skipped on the next run — a crash mid-run costs one case, not the whole
+ * (expensive, serial) sweep. Delete the file to force a fresh sweep.
+ */
+const PROGRESS = `corpus/${lib}.eval-progress.jsonl`;
+const results: CaseResult[] = existsSync(PROGRESS)
+  ? (await readFile(PROGRESS, "utf8")).split("\n").filter(Boolean).map((l) => JSON.parse(l) as CaseResult)
+  : [];
+const doneIds = new Set(results.map((r) => r.id));
+if (doneIds.size) console.log(`resuming — ${doneIds.size} case(s) already recorded in ${PROGRESS}`);
 
 for (const [i, c] of cases.entries()) {
+  if (doneIds.has(c.id)) continue;
   console.log(`\n[${i + 1}/${cases.length}] ${c.repo} @ ${c.parentSha.slice(0, 8)}`);
   const started = Date.now();
-  const record = (result: CaseResult["result"], reason: string, costUsd = 0, turns = 0) => {
+  const record = async (result: CaseResult["result"], reason: string, costUsd = 0, turns = 0) => {
     console.log(`  ${result}: ${reason}${costUsd ? ` ($${costUsd.toFixed(2)})` : ""}`);
-    results.push({ id: c.id, repo: c.repo, sha: c.parentSha, result, reason, costUsd, turns, ms: Date.now() - started });
+    const entry = { id: c.id, repo: c.repo, sha: c.parentSha, result, reason, costUsd, turns, ms: Date.now() - started };
+    results.push(entry);
+    await appendFile(PROGRESS, JSON.stringify(entry) + "\n");
   };
 
   const prep = await prepareCase(c.repo, c.parentSha);
   if (!prep.ok) {
-    record("skipped", `${prep.stage}: ${prep.reason}`);
+    await record("skipped", `${prep.stage}: ${prep.reason}`);
     continue;
   }
   const { dir, python } = prep.prepared;
@@ -78,28 +92,33 @@ for (const [i, c] of cases.entries()) {
       env: venvEnv(dir),
     });
     if (!bump.ok) {
-      record("skipped", `bump install failed: ${tail(bump.stderr, 3)}`);
+      await record("skipped", `bump install failed: ${tail(bump.stderr, 3)}`);
       continue;
     }
 
-    const out = await attemptFix({
-      cwd: dir,
-      library: lib,
-      fromVersion: c.version?.from,
-      toVersion: c.version?.to,
-      python,
-      maxBudgetUsd: budget,
-      maxTurns: 40,
-      // Same rationale as the validator: we measure whether code works, not
-      // whether a 2024 warning policy survives 2026 transitive deps.
-      pytestArgs: ["--override-ini=filterwarnings="],
-    });
-    const kind = out.fixed
-      ? "fixed"
-      : SKIP_REASONS.some((s) => out.reason.startsWith(s))
-        ? "skipped"
-        : "not-fixed";
-    record(kind, out.reason, out.costUsd, out.turns);
+    try {
+      const out = await attemptFix({
+        cwd: dir,
+        library: lib,
+        fromVersion: c.version?.from,
+        toVersion: c.version?.to,
+        python,
+        maxBudgetUsd: budget,
+        maxTurns: 40,
+        // Same rationale as the validator: we measure whether code works, not
+        // whether a 2024 warning policy survives 2026 transitive deps.
+        pytestArgs: ["--override-ini=filterwarnings="],
+      });
+      const kind = out.fixed
+        ? "fixed"
+        : SKIP_REASONS.some((s) => out.reason.startsWith(s))
+          ? "skipped"
+          : "not-fixed";
+      await record(kind, out.reason, out.costUsd, out.turns);
+    } catch (err) {
+      // One crashed case must not take down the rest of the sweep.
+      await record("not-fixed", `crashed: ${((err as Error).message ?? String(err)).slice(0, 120)}`, budget);
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -119,7 +138,7 @@ await writeFile(
 
 const rows = results.map(
   (r) =>
-    `| [${r.repo}](https://github.com/${r.repo}/commit/${r.sha}) | ${r.result} | ${r.reason.slice(0, 80)} | $${r.costUsd.toFixed(2)} | ${(r.ms / 60_000).toFixed(1)}m |`,
+    `| [${r.repo}](https://github.com/${r.repo}/commit/${r.sha}) | ${r.result} | ${r.reason.slice(0, 80)} | $${r.costUsd.toFixed(2)} | ${r.ms ? (r.ms / 60_000).toFixed(1) + "m" : "—"} |`,
 );
 const md = [
   `# greenbump eval — ${lib} v${target.fromMajor} → v${target.toMajor}`,

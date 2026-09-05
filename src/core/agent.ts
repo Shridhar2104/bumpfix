@@ -149,12 +149,30 @@ export async function attemptFix(req: FixRequest): Promise<FixOutcome> {
     },
   });
 
-  for await (const message of conversation) {
-    if (message.type === "result") {
-      costUsd = message.total_cost_usd ?? 0;
-      turns = message.num_turns ?? 0;
-      if (message.subtype === "success") finalText = message.result ?? "";
+  try {
+    for await (const message of conversation) {
+      if (message.type === "result") {
+        costUsd = message.total_cost_usd ?? 0;
+        turns = message.num_turns ?? 0;
+        if (message.subtype === "success") finalText = message.result ?? "";
+      }
     }
+  } catch (err) {
+    const msg = (err as Error).message ?? String(err);
+    // The SDK throws when the run is cut off at the budget ceiling instead of
+    // yielding a result message. A capped run is a normal outcome here, and it
+    // must report its spend — otherwise the action's shared-budget loop would
+    // hand the next attempt money that is already gone.
+    const capped = /maximum budget/i.test(msg);
+    return {
+      ...base,
+      costUsd: capped ? req.maxBudgetUsd : costUsd,
+      turns,
+      fixed: false,
+      reason: capped
+        ? `budget exhausted ($${req.maxBudgetUsd}) before the suite went green`
+        : `agent run failed: ${msg.slice(0, 200)}`,
+    };
   }
 
   const filesChanged = await changedFiles(req.cwd);

@@ -32184,12 +32184,24 @@ async function attemptFix(req) {
       settingSources: []
     }
   });
-  for await (const message of conversation) {
-    if (message.type === "result") {
-      costUsd = message.total_cost_usd ?? 0;
-      turns = message.num_turns ?? 0;
-      if (message.subtype === "success") finalText = message.result ?? "";
+  try {
+    for await (const message of conversation) {
+      if (message.type === "result") {
+        costUsd = message.total_cost_usd ?? 0;
+        turns = message.num_turns ?? 0;
+        if (message.subtype === "success") finalText = message.result ?? "";
+      }
     }
+  } catch (err) {
+    const msg = err.message ?? String(err);
+    const capped = /maximum budget/i.test(msg);
+    return {
+      ...base,
+      costUsd: capped ? req.maxBudgetUsd : costUsd,
+      turns,
+      fixed: false,
+      reason: capped ? `budget exhausted ($${req.maxBudgetUsd}) before the suite went green` : `agent run failed: ${msg.slice(0, 200)}`
+    };
   }
   const filesChanged = await changedFiles(req.cwd);
   const withCost = { ...base, costUsd, turns, filesChanged };
