@@ -29,7 +29,13 @@ const input = (name: string, fallback = "") =>
 
 async function summary(md: string) {
   const path = process.env.GITHUB_STEP_SUMMARY;
-  if (path) await appendFile(path, md + "\n");
+  if (path) {
+    try {
+      await appendFile(path, md + "\n");
+    } catch (err) {
+      console.warn(`greenbump: step summary: ${(err as Error).message}`);
+    }
+  }
   console.log(md.replace(/[#*`]/g, ""));
 }
 

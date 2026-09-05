@@ -32456,7 +32456,13 @@ async function push(cwd2, url2, branch) {
 var input = (name, fallback = "") => process.env[`INPUT_${name.toUpperCase().replace(/ /g, "_")}`]?.trim() || fallback;
 async function summary(md) {
   const path = process.env.GITHUB_STEP_SUMMARY;
-  if (path) await appendFile2(path, md + "\n");
+  if (path) {
+    try {
+      await appendFile2(path, md + "\n");
+    } catch (err) {
+      console.warn(`greenbump: step summary: ${err.message}`);
+    }
+  }
   console.log(md.replace(/[#*`]/g, ""));
 }
 var cwd = input("working-directory", process.env.GITHUB_WORKSPACE || process.cwd());
