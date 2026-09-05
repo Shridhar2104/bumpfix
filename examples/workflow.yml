@@ -12,7 +12,11 @@ on:
       - "**/poetry.lock"
       - uv.lock
       - "**/uv.lock"
+      - Pipfile
+      - "**/Pipfile"
       - Pipfile.lock
+      - setup.py
+      - setup.cfg
 
 permissions:
   contents: write
