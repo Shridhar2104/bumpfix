@@ -1,6 +1,6 @@
 import{createRequire}from'module';const require=createRequire(import.meta.url);
 
-// src/action.ts
+// src/action/main.ts
 import { appendFile } from "node:fs/promises";
 
 // node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
@@ -32028,7 +32028,7 @@ function $Q(e, t) {
   return null;
 }
 
-// src/exec.ts
+// src/core/exec.ts
 import { execFile } from "node:child_process";
 function run(cmd, args, opts = {}) {
   const started = Date.now();
@@ -32059,7 +32059,7 @@ function run(cmd, args, opts = {}) {
 }
 var tail = (s, lines = 25) => s.trimEnd().split("\n").slice(-lines).join("\n");
 
-// src/pytest.ts
+// src/core/pytest.ts
 function parsePytest(out) {
   const counts = { passed: 0, failed: 0, errors: 0, skipped: 0 };
   const line = out.split("\n").reverse().find((l) => /\d+ (passed|failed|error|skipped)/.test(l)) ?? "";
@@ -32103,7 +32103,7 @@ ${r.stderr}`.match(/(\d+) tests? collected/);
   return r.stdout.split("\n").filter((l) => l.includes("::")).length;
 }
 
-// src/agent.ts
+// src/core/agent.ts
 var TEST_PATH = /(^|\/)(tests?|testing)\//i;
 var TEST_FILE = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py)$/i;
 var isTestFile = (p) => TEST_PATH.test(p) || TEST_FILE.test(p);
@@ -32221,7 +32221,7 @@ async function attemptFix(req2) {
   };
 }
 
-// src/action.ts
+// src/action/main.ts
 var input = (name, fallback = "") => process.env[`INPUT_${name.toUpperCase().replace(/ /g, "_")}`]?.trim() || fallback;
 async function summary(md) {
   const path = process.env.GITHUB_STEP_SUMMARY;

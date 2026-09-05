@@ -1,6 +1,6 @@
 import { appendFile } from "node:fs/promises";
-import { attemptFix } from "./agent.ts";
-import { run } from "./exec.ts";
+import { attemptFix } from "../core/agent.ts";
+import { run } from "../core/exec.ts";
 
 /**
  * GitHub Action entry point.

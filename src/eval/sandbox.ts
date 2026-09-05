@@ -2,7 +2,7 @@ import { mkdtemp, rm, readFile, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { run, tail } from "./exec.ts";
+import { run, tail } from "../core/exec.ts";
 
 const CLONE_MS = 180_000;
 const INSTALL_MS = 480_000;
