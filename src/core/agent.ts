@@ -15,6 +15,9 @@ export type FixRequest = {
   maxTurns: number;
   /** Extra pytest args, e.g. eval sandboxes blank warning filters. */
   pytestArgs?: string[];
+  /** Explicit Claude Code binary. Required when running from a bundle with no
+   *  node_modules (the SDK cannot resolve its platform package there). */
+  pathToClaudeCodeExecutable?: string;
 };
 
 export type FixOutcome = {
@@ -165,6 +168,9 @@ export async function attemptFix(req: FixRequest): Promise<FixOutcome> {
       maxBudgetUsd: req.maxBudgetUsd,
       allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "WebFetch"],
       settingSources: [],
+      ...(req.pathToClaudeCodeExecutable
+        ? { pathToClaudeCodeExecutable: req.pathToClaudeCodeExecutable }
+        : {}),
     },
   });
 
