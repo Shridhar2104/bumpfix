@@ -1,8 +1,7 @@
 name: bumpfix
 description: >
-  When a dependency's major-version bump breaks your build, fix the code.
-  Runs in your own CI, verifies against your existing tests, and stays silent
-  unless the suite actually passes.
+  Fixes your code in CI when a dependency major bump breaks the build.
+  Verified against your tests; silent otherwise.
 author: bumpfix
 
 branding:
