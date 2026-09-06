@@ -141,7 +141,7 @@ const rows = results.map(
     `| [${r.repo}](https://github.com/${r.repo}/commit/${r.sha}) | ${r.result} | ${r.reason.slice(0, 80)} | $${r.costUsd.toFixed(2)} | ${r.ms ? (r.ms / 60_000).toFixed(1) + "m" : "—"} |`,
 );
 const md = [
-  `# greenbump eval — ${lib} v${target.fromMajor} → v${target.toMajor}`,
+  `# bumpfix eval — ${lib} v${target.fromMajor} → v${target.toMajor}`,
   "",
   `Generated ${new Date().toISOString().slice(0, 10)} · budget $${budget}/case · ${cases.length} mined cases`,
   "",

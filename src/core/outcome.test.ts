@@ -71,14 +71,14 @@ test("summary notes the fallback branch and why", () => {
       attempts: [attempt({ fixed: true, filesChanged: ["a.py"], testsAfter: { passed: 13, failed: 0, errors: 0, skipped: 0 } })],
       delivery: {
         mode: "fix-branch",
-        branch: "greenbump/pydantic-x1",
+        branch: "bumpfix/pydantic-x1",
         pushed: true,
         commented: false,
-        note: "the PR branch moved while greenbump was running",
+        note: "the PR branch moved while bumpfix was running",
       },
       totalCostUsd: 1.25,
     }),
   );
-  assert.match(md, /greenbump\/pydantic-x1/);
-  assert.match(md, /moved while greenbump was running/);
+  assert.match(md, /bumpfix\/pydantic-x1/);
+  assert.match(md, /moved while bumpfix was running/);
 });

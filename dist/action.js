@@ -32382,7 +32382,7 @@ async function writeOutcomeFile(record) {
     ).catch(() => {
     });
   }
-  const path = join5(process.env.RUNNER_TEMP || tmpdir(), "greenbump-outcome.json");
+  const path = join5(process.env.RUNNER_TEMP || tmpdir(), "bumpfix-outcome.json");
   await writeFile(path, JSON.stringify(record, null, 2) + "\n");
   if (process.env.GITHUB_OUTPUT) {
     await appendFile(process.env.GITHUB_OUTPUT, `outcome-file=${path}
@@ -32391,7 +32391,7 @@ async function writeOutcomeFile(record) {
   return path;
 }
 function renderSummary(record) {
-  const lines = ["### greenbump"];
+  const lines = ["### bumpfix"];
   if (!record.attempts.length) {
     lines.push("", "No major-version bumps detected. Nothing to do.");
     return lines.join("\n");
@@ -32429,7 +32429,7 @@ function renderSummary(record) {
 function buildCommentBody(record) {
   const fixed = record.attempts.filter((a) => a.fixed);
   if (!fixed.length) return null;
-  const lines = ["### greenbump fixed this upgrade \u2705"];
+  const lines = ["### bumpfix fixed this upgrade \u2705"];
   for (const a of fixed) {
     const version = a.fromVersion && a.toVersion ? ` ${a.fromVersion} \u2192 ${a.toVersion}` : "";
     lines.push(
@@ -32461,7 +32461,7 @@ async function postComment(token2, repo2, prNumber, body) {
       headers: {
         authorization: `Bearer ${token2}`,
         accept: "application/vnd.github+json",
-        "user-agent": "greenbump"
+        "user-agent": "bumpfix"
       },
       body: JSON.stringify({ body })
     });
@@ -32485,17 +32485,17 @@ async function ensureClaudeBinary() {
     if (existsSync2(local)) return local;
   } catch {
   }
-  const prefix = join6(process.env.RUNNER_TEMP || tmpdir2(), "greenbump-cli");
+  const prefix = join6(process.env.RUNNER_TEMP || tmpdir2(), "bumpfix-cli");
   const binary = join6(prefix, "node_modules", pkg, BIN);
   if (existsSync2(binary)) return binary;
-  console.log(`greenbump: fetching agent runtime (${pkg}@${SDK_VERSION})\u2026`);
+  console.log(`bumpfix: fetching agent runtime (${pkg}@${SDK_VERSION})\u2026`);
   const r = await run(
     "npm",
     ["install", "--prefix", prefix, "--no-save", "--no-audit", "--no-fund", `${pkg}@${SDK_VERSION}`],
     { timeoutMs: 3e5 }
   );
   if (!r.ok || !existsSync2(binary)) {
-    console.warn(`greenbump: could not fetch agent runtime: ${tail(r.stderr, 3)}`);
+    console.warn(`bumpfix: could not fetch agent runtime: ${tail(r.stderr, 3)}`);
     return null;
   }
   return binary;
@@ -32545,7 +32545,7 @@ function choosePushTarget(opts) {
     return {
       mode: "fix-branch",
       branch: fallbackBranch2,
-      note: "the PR branch moved while greenbump was running"
+      note: "the PR branch moved while bumpfix was running"
     };
   }
   return { mode: "pr-branch", branch: pr3.headRef };
@@ -32554,8 +32554,8 @@ var git = (cwd2, args) => run("git", args, { cwd: cwd2, timeoutMs: 12e4 });
 async function commitFix(cwd2, files, message) {
   const top = await git(cwd2, ["rev-parse", "--show-toplevel"]);
   const root = top.stdout.trim() || cwd2;
-  await git(root, ["config", "user.name", "greenbump"]);
-  await git(root, ["config", "user.email", "bot@greenbump.dev"]);
+  await git(root, ["config", "user.name", "bumpfix"]);
+  await git(root, ["config", "user.email", "bot@bumpfix.dev"]);
   await git(root, ["add", "--", ...files]);
   const r = await git(root, ["commit", "-m", message]);
   return r.ok;
@@ -32572,11 +32572,11 @@ async function push(cwd2, url2, branch) {
 
 // src/action/main.ts
 process.on("uncaughtException", (err) => {
-  console.warn(`greenbump: unexpected error: ${err?.message ?? err}. Your build is unaffected.`);
+  console.warn(`bumpfix: unexpected error: ${err?.message ?? err}. Your build is unaffected.`);
   process.exit(0);
 });
 process.on("unhandledRejection", (err) => {
-  console.warn(`greenbump: unexpected rejection: ${err?.message ?? err}. Your build is unaffected.`);
+  console.warn(`bumpfix: unexpected rejection: ${err?.message ?? err}. Your build is unaffected.`);
   process.exit(0);
 });
 var input = (name, fallback = "") => process.env[`INPUT_${name.toUpperCase().replace(/ /g, "_")}`]?.trim() || fallback;
@@ -32586,7 +32586,7 @@ async function summary(md) {
     try {
       await appendFile2(path, md + "\n");
     } catch (err) {
-      console.warn(`greenbump: step summary: ${err.message}`);
+      console.warn(`bumpfix: step summary: ${err.message}`);
     }
   }
   console.log(md.replace(/[#*`]/g, ""));
@@ -32634,7 +32634,7 @@ async function detectBumps() {
   }
   if (!pr2) return [];
   const fetch2 = await git2(["fetch", "--quiet", "--depth=1", "origin", pr2.baseSha]);
-  if (!fetch2.ok) console.warn(`greenbump: base fetch failed: ${tail(fetch2.stderr, 3)}`);
+  if (!fetch2.ok) console.warn(`bumpfix: base fetch failed: ${tail(fetch2.stderr, 3)}`);
   const diff = await git2(["diff", pr2.baseSha, "HEAD", "--", ...MANIFEST_PATHSPECS]);
   if (!diff.ok) throw new Error(`could not diff against the PR base: ${tail(diff.stderr, 3)}`);
   return detectMajorBumps(diff.stdout);
@@ -32651,7 +32651,7 @@ var buildRecord = (attempts2, detected2, delivery2) => ({
   totalCostUsd: totalCost(attempts2)
 });
 async function finish(record) {
-  await writeOutcomeFile(record).catch((err) => console.warn(`greenbump: outcome file: ${err.message}`));
+  await writeOutcomeFile(record).catch((err) => console.warn(`bumpfix: outcome file: ${err.message}`));
   await summary(renderSummary(record));
   process.exit(0);
 }
@@ -32662,20 +32662,20 @@ try {
   detected = await detectBumps();
 } catch (err) {
   detectionError = err.message;
-  console.warn(`greenbump: detection failed: ${detectionError}`);
+  console.warn(`bumpfix: detection failed: ${detectionError}`);
 }
 if (!detected.length) {
   if (detectionError) {
     await writeOutcomeFile(buildRecord([], [], NONE)).catch(() => {
     });
-    await summary(`### greenbump
+    await summary(`### bumpfix
 
 Detection failed: ${detectionError}
 
 Nothing was changed and your build is unaffected.`);
     process.exit(0);
   }
-  console.log("greenbump: no major-version bumps detected");
+  console.log("bumpfix: no major-version bumps detected");
   await finish(buildRecord([], [], NONE));
 }
 var checkoutSha = (await git2(["rev-parse", "HEAD"])).stdout.trim();
@@ -32708,7 +32708,7 @@ for (const bump of detected) {
     });
     continue;
   }
-  console.log(`greenbump \xB7 ${bump.library} \xB7 budget $${remaining} \xB7 max ${maxTurns} turns`);
+  console.log(`bumpfix \xB7 ${bump.library} \xB7 budget $${remaining} \xB7 max ${maxTurns} turns`);
   const started = Date.now();
   let committed = false;
   try {
@@ -32737,7 +32737,7 @@ for (const bump of detected) {
       committed = await commitFix(
         cwd,
         out.filesChanged,
-        `greenbump: migrate to ${bump.library} ${bump.toVersion ?? "major upgrade"}
+        `bumpfix: migrate to ${bump.library} ${bump.toVersion ?? "major upgrade"}
 
 ${out.reason}
 
@@ -32771,7 +32771,7 @@ if (!fixedLibraries.length) {
 }
 var fallbackBranch = input(
   "branch",
-  `greenbump/${fixedLibraries.join("-")}-${Date.now().toString(36)}`
+  `bumpfix/${fixedLibraries.join("-")}-${Date.now().toString(36)}`
 );
 if (!token || !repo) {
   await git2(["branch", fallbackBranch]);
@@ -32803,7 +32803,7 @@ if (pushed.ok) {
     branch: fallbackBranch,
     pushed: true,
     commented: false,
-    note: "the PR branch moved while greenbump was pushing the fix"
+    note: "the PR branch moved while bumpfix was pushing the fix"
   } : { mode: plan.mode, branch: plan.branch, pushed: false, commented: false, note: `push failed: ${pushed.stderr.slice(-300)}` };
 } else {
   delivery = {

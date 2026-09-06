@@ -1,5 +1,5 @@
 {
-  "name": "greenbump",
+  "name": "bumpfix",
   "version": "1.0.0",
   "description": "Fixes your code when a dependency major-version bump breaks the build",
   "main": "index.js",

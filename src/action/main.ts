@@ -29,11 +29,11 @@ import { choosePushTarget, commitFix, push, remoteHead } from "./deliver.ts";
 // regions (an SDK background rejection, an unexpected throw in delivery) must
 // still not fail the customer's build.
 process.on("uncaughtException", (err) => {
-  console.warn(`greenbump: unexpected error: ${err?.message ?? err}. Your build is unaffected.`);
+  console.warn(`bumpfix: unexpected error: ${err?.message ?? err}. Your build is unaffected.`);
   process.exit(0);
 });
 process.on("unhandledRejection", (err) => {
-  console.warn(`greenbump: unexpected rejection: ${(err as Error)?.message ?? err}. Your build is unaffected.`);
+  console.warn(`bumpfix: unexpected rejection: ${(err as Error)?.message ?? err}. Your build is unaffected.`);
   process.exit(0);
 });
 
@@ -46,7 +46,7 @@ async function summary(md: string) {
     try {
       await appendFile(path, md + "\n");
     } catch (err) {
-      console.warn(`greenbump: step summary: ${(err as Error).message}`);
+      console.warn(`bumpfix: step summary: ${(err as Error).message}`);
     }
   }
   console.log(md.replace(/[#*`]/g, ""));
@@ -100,7 +100,7 @@ async function detectBumps(): Promise<DetectedBump[]> {
   }
   if (!pr) return [];
   const fetch = await git(["fetch", "--quiet", "--depth=1", "origin", pr.baseSha]);
-  if (!fetch.ok) console.warn(`greenbump: base fetch failed: ${tail(fetch.stderr, 3)}`);
+  if (!fetch.ok) console.warn(`bumpfix: base fetch failed: ${tail(fetch.stderr, 3)}`);
   const diff = await git(["diff", pr.baseSha, "HEAD", "--", ...MANIFEST_PATHSPECS]);
   // run() never throws, so a failed diff must be surfaced here — otherwise an
   // unfetchable base silently reads as "no bumps detected".
@@ -125,7 +125,7 @@ const buildRecord = (
 });
 
 async function finish(record: OutcomeRecord): Promise<never> {
-  await writeOutcomeFile(record).catch((err) => console.warn(`greenbump: outcome file: ${err.message}`));
+  await writeOutcomeFile(record).catch((err) => console.warn(`bumpfix: outcome file: ${err.message}`));
   await summary(renderSummary(record));
   process.exit(0);
 }
@@ -138,17 +138,17 @@ try {
   detected = await detectBumps();
 } catch (err) {
   detectionError = (err as Error).message;
-  console.warn(`greenbump: detection failed: ${detectionError}`);
+  console.warn(`bumpfix: detection failed: ${detectionError}`);
 }
 
 if (!detected.length) {
   if (detectionError) {
     // Not the same outcome as "no bumps": say so instead of claiming a scan.
     await writeOutcomeFile(buildRecord([], [], NONE)).catch(() => {});
-    await summary(`### greenbump\n\nDetection failed: ${detectionError}\n\nNothing was changed and your build is unaffected.`);
+    await summary(`### bumpfix\n\nDetection failed: ${detectionError}\n\nNothing was changed and your build is unaffected.`);
     process.exit(0);
   }
-  console.log("greenbump: no major-version bumps detected");
+  console.log("bumpfix: no major-version bumps detected");
   await finish(buildRecord([], [], NONE));
 }
 
@@ -191,7 +191,7 @@ for (const bump of detected) {
     continue;
   }
 
-  console.log(`greenbump · ${bump.library} · budget $${remaining} · max ${maxTurns} turns`);
+  console.log(`bumpfix · ${bump.library} · budget $${remaining} · max ${maxTurns} turns`);
   const started = Date.now();
   let committed = false;
   try {
@@ -223,7 +223,7 @@ for (const bump of detected) {
       committed = await commitFix(
         cwd,
         out.filesChanged,
-        `greenbump: migrate to ${bump.library} ${bump.toVersion ?? "major upgrade"}\n\n` +
+        `bumpfix: migrate to ${bump.library} ${bump.toVersion ?? "major upgrade"}\n\n` +
           `${out.reason}\n\nVerified: the existing test suite passes and no test files were modified.`,
       );
       if (committed) {
@@ -256,7 +256,7 @@ if (!fixedLibraries.length) {
 
 const fallbackBranch = input(
   "branch",
-  `greenbump/${fixedLibraries.join("-")}-${Date.now().toString(36)}`,
+  `bumpfix/${fixedLibraries.join("-")}-${Date.now().toString(36)}`,
 );
 
 if (!token || !repo) {
@@ -296,7 +296,7 @@ if (pushed.ok) {
         branch: fallbackBranch,
         pushed: true,
         commented: false,
-        note: "the PR branch moved while greenbump was pushing the fix",
+        note: "the PR branch moved while bumpfix was pushing the fix",
       }
     : { mode: plan.mode, branch: plan.branch, pushed: false, commented: false, note: `push failed: ${pushed.stderr.slice(-300)}` };
 } else {

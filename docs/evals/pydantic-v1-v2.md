@@ -1,4 +1,4 @@
-# greenbump eval — pydantic v1 → v2
+# bumpfix eval — pydantic v1 → v2
 
 Generated 2026-09-05 · budget $3/case · 13 mined cases
 
@@ -7,7 +7,7 @@ Generated 2026-09-05 · budget $3/case · 13 mined cases
 Notes on the misses, for the curious:
 
 - **authx** is a corpus artifact, not an engine failure — the mined commit was already migrated to v2, so there was no v1 code to fix; the agent investigated and correctly declined to force it. Excluding it, the rate is 3 of 7 (43%).
-- **fastapi-hypermodel**'s fix modified `tests/app.py` — a fixture app that lives inside `tests/` — and greenbump's never-touch-tests guard discards such fixes unconditionally. The safety contract outranks the win.
+- **fastapi-hypermodel**'s fix modified `tests/app.py` — a fixture app that lives inside `tests/` — and bumpfix's never-touch-tests guard discards such fixes unconditionally. The safety contract outranks the win.
 - **lnurl** hit the $3 budget ceiling mid-attempt; a higher `max-cost-usd` may well have landed it.
 
 Every miss was silent: no push, no comment, no branch. That is the product working as designed — a failed attempt costs a capped few dollars, never credibility.

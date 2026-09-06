@@ -1,14 +1,14 @@
-# greenbump
+# bumpfix
 
-**When a dependency's major-version bump breaks your build, greenbump fixes
+**When a dependency's major-version bump breaks your build, bumpfix fixes
 your code — in your own CI, verified against your own tests.**
 
 Dependabot opens a PR bumping `pydantic` to v2. Your suite goes red. A few
 minutes later a commit lands on that same PR migrating your code to the new
 API, ready for your checks to rerun green. That's the whole product.
 
-**See it on a real PR:** [greenbump-demo#1](https://github.com/Shridhar2104/greenbump-demo/pull/1)
-— a pydantic 1.10 → 2.9 bump turns the suite red, and greenbump's commit
+**See it on a real PR:** [bumpfix-demo#1](https://github.com/Shridhar2104/bumpfix-demo/pull/1)
+— a pydantic 1.10 → 2.9 bump turns the suite red, and bumpfix's commit
 migrates two source files (`@validator` → `@field_validator`, `const=` →
 `Literal`, `.dict()` → `model_dump`, …) back to 10/10 green. $0.39, 5 turns,
 no test file touched.
@@ -16,7 +16,7 @@ no test file touched.
 ## How it works
 
 1. A PR changes a Python manifest (`requirements.txt`, `pyproject.toml`,
-   a lockfile). greenbump diffs it and finds packages whose **major** version
+   a lockfile). bumpfix diffs it and finds packages whose **major** version
    increased.
 2. It runs your test suite. Already green? It stops — nothing to fix.
 3. If the bump broke the suite, an agent (Claude) edits your **source code**
@@ -26,22 +26,22 @@ no test file touched.
 
 ## What it will never do
 
-- **Fail your build.** Every path exits 0. greenbump is an extra chance, not a
+- **Fail your build.** Every path exits 0. bumpfix is an extra chance, not a
   gate.
 - **Ship an unverified fix.** No green suite, no push, no comment. Silence.
 - **Touch your tests.** Fixes that edit, skip, or weaken tests are discarded.
   It also verifies the number of collected tests did not drop.
 - **Exceed the budget.** `max-cost-usd` (default $3) is a hard ceiling.
 - **Send your code anywhere.** It runs in your CI with your API key. There is
-  no greenbump server.
+  no bumpfix server.
 
 ## Setup
 
-Add `.github/workflows/greenbump.yml` — see [examples/workflow.yml](examples/workflow.yml):
+Add `.github/workflows/bumpfix.yml` — see [examples/workflow.yml](examples/workflow.yml):
 
 - `permissions: contents: write` + `pull-requests: write`
 - `actions/checkout` with `ref: ${{ github.head_ref }}` (so the fix can land
-  on the PR; without it greenbump falls back to pushing a separate branch)
+  on the PR; without it bumpfix falls back to pushing a separate branch)
 - your usual dependency install step
 - the action, with `ANTHROPIC_API_KEY` in secrets
 
@@ -55,7 +55,7 @@ secrets. Use `pull_request` as shown above.
 
 **Re-running your checks:** a push made with the default `${{ github.token }}`
 does not re-trigger workflow runs — that's a GitHub anti-recursion guard, not
-a bug. After greenbump comments, re-run the failed checks manually, or set
+a bug. After bumpfix comments, re-run the failed checks manually, or set
 `github-token` to a PAT or GitHub App token to have them rerun automatically.
 (If you pass a PAT, pass it via the `github-token` input — it takes precedence
 over any ambient `GITHUB_TOKEN` env var.)
@@ -71,8 +71,8 @@ Measured on real-world open-source migrations mined from GitHub (each case is
 a repo whose suite was green before the bump and red after):
 
 On 13 pydantic v1 → v2 bumps mined from real GitHub repos: 5 didn't actually
-break the suite (greenbump correctly stayed silent), and of the **8 that
-broke, greenbump fixed 3 (38%)** — median cost **$2.04** per attempt, no test
+break the suite (bumpfix correctly stayed silent), and of the **8 that
+broke, bumpfix fixed 3 (38%)** — median cost **$2.04** per attempt, no test
 file touched, no unverified fix shipped. One miss was a fix rejected by the
 never-touch-tests guard, one hit the $3 budget ceiling; every miss was
 silent.

@@ -56,7 +56,7 @@ export async function writeOutcomeFile(record: OutcomeRecord): Promise<string> {
       `fixed=${record.attempts.some((a) => a.fixed)}\n`,
     ).catch(() => {});
   }
-  const path = join(process.env.RUNNER_TEMP || tmpdir(), "greenbump-outcome.json");
+  const path = join(process.env.RUNNER_TEMP || tmpdir(), "bumpfix-outcome.json");
   await writeFile(path, JSON.stringify(record, null, 2) + "\n");
   if (process.env.GITHUB_OUTPUT) {
     await appendFile(process.env.GITHUB_OUTPUT, `outcome-file=${path}\n`);
@@ -66,7 +66,7 @@ export async function writeOutcomeFile(record: OutcomeRecord): Promise<string> {
 
 /** Markdown for the step summary — the same numbers on every exit path. */
 export function renderSummary(record: OutcomeRecord): string {
-  const lines = ["### greenbump"];
+  const lines = ["### bumpfix"];
   if (!record.attempts.length) {
     lines.push("", "No major-version bumps detected. Nothing to do.");
     return lines.join("\n");

@@ -5,7 +5,7 @@ export function buildCommentBody(record: OutcomeRecord): string | null {
   const fixed = record.attempts.filter((a) => a.fixed);
   if (!fixed.length) return null;
 
-  const lines = ["### greenbump fixed this upgrade ✅"];
+  const lines = ["### bumpfix fixed this upgrade ✅"];
   for (const a of fixed) {
     const version = a.fromVersion && a.toVersion ? ` ${a.fromVersion} → ${a.toVersion}` : "";
     lines.push(
@@ -48,7 +48,7 @@ export async function postComment(
       headers: {
         authorization: `Bearer ${token}`,
         accept: "application/vnd.github+json",
-        "user-agent": "greenbump",
+        "user-agent": "bumpfix",
       },
       body: JSON.stringify({ body }),
     });
