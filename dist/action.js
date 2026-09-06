@@ -1,7 +1,7 @@
 import{createRequire}from'module';const require=createRequire(import.meta.url);
 
-// src/action.ts
-import { appendFile } from "node:fs/promises";
+// src/action/main.ts
+import { appendFile as appendFile2 } from "node:fs/promises";
 
 // node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
 import { createRequire as bee } from "node:module";
@@ -32028,7 +32028,7 @@ function $Q(e, t) {
   return null;
 }
 
-// src/exec.ts
+// src/core/exec.ts
 import { execFile } from "node:child_process";
 function run(cmd, args, opts = {}) {
   const started = Date.now();
@@ -32059,7 +32059,7 @@ function run(cmd, args, opts = {}) {
 }
 var tail = (s, lines = 25) => s.trimEnd().split("\n").slice(-lines).join("\n");
 
-// src/pytest.ts
+// src/core/pytest.ts
 function parsePytest(out) {
   const counts = { passed: 0, failed: 0, errors: 0, skipped: 0 };
   const line = out.split("\n").reverse().find((l) => /\d+ (passed|failed|error|skipped)/.test(l)) ?? "";
@@ -32094,7 +32094,7 @@ ${r.stderr}`;
 async function collectCount(opts) {
   const r = await run(
     opts.python ?? "python",
-    ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
+    ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", ...opts.args ?? []],
     { cwd: opts.cwd, timeoutMs: 12e4, env: { PYTHONDONTWRITEBYTECODE: "1", CI: "1" } }
   );
   const m = `${r.stdout}
@@ -32103,14 +32103,14 @@ ${r.stderr}`.match(/(\d+) tests? collected/);
   return r.stdout.split("\n").filter((l) => l.includes("::")).length;
 }
 
-// src/agent.ts
+// src/core/agent.ts
 var TEST_PATH = /(^|\/)(tests?|testing)\//i;
 var TEST_FILE = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py)$/i;
 var isTestFile = (p) => TEST_PATH.test(p) || TEST_FILE.test(p);
 var ARTIFACT = /(^|\/)(__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.tox|node_modules|\.venv|venv|[^/]*\.egg-info)\/|\.py[co]$|(^|\/)\.DS_Store$/i;
-async function changedFiles(cwd) {
+async function changedFiles(cwd2) {
   const r = await run("git", ["status", "--porcelain", "--untracked-files=all"], {
-    cwd,
+    cwd: cwd2,
     timeoutMs: 3e4
   });
   return r.stdout.split("\n").filter(Boolean).map((line) => {
@@ -32119,8 +32119,8 @@ async function changedFiles(cwd) {
     return arrow === -1 ? path : path.slice(arrow + 4);
   }).map((p) => p.replace(/^"|"$/g, "")).filter(Boolean).filter((p) => !ARTIFACT.test(p));
 }
-function buildPrompt(req2, failures) {
-  const version = req2.fromVersion && req2.toVersion ? `${req2.library} ${req2.fromVersion} \u2192 ${req2.toVersion}` : `${req2.library} (major version upgrade)`;
+function buildPrompt(req, failures) {
+  const version = req.fromVersion && req.toVersion ? `${req.library} ${req.fromVersion} \u2192 ${req.toVersion}` : `${req.library} (major version upgrade)`;
   return `A dependency upgrade broke this repository's test suite.
 
 UPGRADE: ${version}
@@ -32133,14 +32133,14 @@ ${failures}
 </test-failures>
 
 Your job is to update the SOURCE CODE so the existing tests pass against the new
-version of ${req2.library}.
+version of ${req.library}.
 
 How to work:
 1. Read the failing output and find the code that uses the old API.
 2. If you are unsure what replaced an API, fetch the library's official migration
    guide or changelog and read what actually changed. Do not guess at renames.
 3. Make the change, then run the test suite yourself to check:
-   ${req2.python ?? "python"} -m pytest -q
+   ${req.python ?? "python"} -m pytest -q
 4. Repeat until the suite is green.
 
 Hard rules \u2014 a violation makes the whole attempt worthless:
@@ -32157,8 +32157,8 @@ Hard rules \u2014 a violation makes the whole attempt worthless:
 If you genuinely cannot make the suite pass, stop and say so plainly. Stopping is
 a valid, useful outcome \u2014 shipping a wrong patch is not.`;
 }
-async function attemptFix(req2) {
-  const testOpts = { cwd: req2.cwd, python: req2.python };
+async function attemptFix(req) {
+  const testOpts = { cwd: req.cwd, python: req.python, args: req.pytestArgs };
   const before = await runPytest(testOpts);
   const base = {
     costUsd: 0,
@@ -32173,25 +32173,37 @@ async function attemptFix(req2) {
   let turns = 0;
   let finalText = "";
   const conversation = SVt({
-    prompt: buildPrompt(req2, before.output),
+    prompt: buildPrompt(req, before.output),
     options: {
-      cwd: req2.cwd,
+      cwd: req.cwd,
       model: "claude-opus-5",
       permissionMode: "bypassPermissions",
-      maxTurns: req2.maxTurns,
-      maxBudgetUsd: req2.maxBudgetUsd,
+      maxTurns: req.maxTurns,
+      maxBudgetUsd: req.maxBudgetUsd,
       allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "WebFetch"],
       settingSources: []
     }
   });
-  for await (const message of conversation) {
-    if (message.type === "result") {
-      costUsd = message.total_cost_usd ?? 0;
-      turns = message.num_turns ?? 0;
-      if (message.subtype === "success") finalText = message.result ?? "";
+  try {
+    for await (const message of conversation) {
+      if (message.type === "result") {
+        costUsd = message.total_cost_usd ?? 0;
+        turns = message.num_turns ?? 0;
+        if (message.subtype === "success") finalText = message.result ?? "";
+      }
     }
+  } catch (err) {
+    const msg = err.message ?? String(err);
+    const capped = /maximum budget/i.test(msg);
+    return {
+      ...base,
+      costUsd: capped ? req.maxBudgetUsd : costUsd,
+      turns,
+      fixed: false,
+      reason: capped ? `budget exhausted ($${req.maxBudgetUsd}) before the suite went green` : `agent run failed: ${msg.slice(0, 200)}`
+    };
   }
-  const filesChanged = await changedFiles(req2.cwd);
+  const filesChanged = await changedFiles(req.cwd);
   const withCost = { ...base, costUsd, turns, filesChanged };
   if (!filesChanged.length) {
     return { ...withCost, fixed: false, reason: `agent made no changes${finalText ? `: ${finalText.slice(0, 200)}` : ""}` };
@@ -32221,96 +32233,466 @@ async function attemptFix(req2) {
   };
 }
 
-// src/action.ts
+// src/core/detect.ts
+var MANIFEST = /(^|\/)(requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile|Pipfile\.lock|setup\.py|setup\.cfg)$/;
+var LOCKFILE = /(^|\/)(poetry\.lock|uv\.lock)$/;
+var norm = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
+var IGNORE = /* @__PURE__ */ new Set(["version", "python", "python-version", "python-full-version", "name"]);
+var major = (v) => {
+  const m = v.match(/^v?(\d+)/);
+  return m ? Number(m[1]) : null;
+};
+var REQ_LINE = /^["']?([A-Za-z0-9][A-Za-z0-9._-]*)["']?\s*(?:\[[^\]]*\])?\s*(?:===|==|>=|~=|\^|>|=)\s*v?(\d+(?:\.\d+)*)/;
+var TOML_DEP_LINE = /^["']?([A-Za-z0-9][A-Za-z0-9._-]*)["']?\s*=\s*(?:\{[^}]*?version\s*=\s*)?["'][~^>=<!]*v?(\d+(?:\.\d+)*)/;
+var JSON_DEP_LINE = /^"([A-Za-z0-9._-]+)":\s*\{.*?"version":\s*"==?v?(\d+(?:\.\d+)*)"/;
+var LOCK_NAME = /^name\s*=\s*["']([A-Za-z0-9._-]+)["']/;
+var LOCK_VERSION = /^version\s*=\s*["']v?(\d+(?:\.\d+)*)["']/;
+function detectMajorBumps(diff) {
+  const byPkg = /* @__PURE__ */ new Map();
+  let file = "";
+  let inManifest = false;
+  let inLockfile = false;
+  let lockContext = "";
+  const record = (name, version, side) => {
+    const key = norm(name);
+    if (IGNORE.has(key)) return;
+    const entry = byPkg.get(key) ?? { manifest: file, display: key };
+    const existing = entry[side];
+    if (!existing || version.split(".").length > existing.split(".").length) entry[side] = version;
+    byPkg.set(key, entry);
+  };
+  for (const raw of diff.split("\n")) {
+    if (raw.startsWith("+++ ")) {
+      file = raw.replace(/^\+\+\+ (b\/)?/, "").trim();
+      inManifest = file !== "/dev/null" && MANIFEST.test(file);
+      inLockfile = inManifest && LOCKFILE.test(file);
+      lockContext = "";
+      continue;
+    }
+    if (raw.startsWith("--- ") || !inManifest) continue;
+    const sign = raw[0];
+    if (sign !== "+" && sign !== "-" && sign !== " ") continue;
+    const line = raw.slice(1).trim();
+    const name = inLockfile ? line.match(LOCK_NAME) : null;
+    if (name) {
+      lockContext = name[1];
+      continue;
+    }
+    if (sign === " ") continue;
+    const side = sign === "-" ? "removed" : "added";
+    const lockVer = inLockfile ? line.match(LOCK_VERSION) : null;
+    if (lockVer && lockContext) {
+      record(lockContext, lockVer[1], side);
+      continue;
+    }
+    const m = line.match(JSON_DEP_LINE) ?? line.match(TOML_DEP_LINE) ?? line.match(REQ_LINE);
+    if (m) record(m[1], m[2], side);
+  }
+  const bumps = [];
+  for (const entry of byPkg.values()) {
+    if (!entry.removed || !entry.added) continue;
+    const from = major(entry.removed);
+    const to = major(entry.added);
+    if (from === null || to === null || to <= from) continue;
+    bumps.push({
+      library: entry.display,
+      fromVersion: entry.removed,
+      toVersion: entry.added,
+      manifest: entry.manifest
+    });
+  }
+  return bumps;
+}
+
+// src/core/outcome.ts
+import { appendFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join as join5 } from "node:path";
+var totalCost = (attempts2) => Math.round(attempts2.reduce((sum, a) => sum + a.costUsd, 0) * 100) / 100;
+async function writeOutcomeFile(record) {
+  const path = join5(process.env.RUNNER_TEMP || tmpdir(), "greenbump-outcome.json");
+  await writeFile(path, JSON.stringify(record, null, 2) + "\n");
+  if (process.env.GITHUB_OUTPUT) {
+    await appendFile(
+      process.env.GITHUB_OUTPUT,
+      `outcome-file=${path}
+fixed=${record.attempts.some((a) => a.fixed)}
+`
+    );
+  }
+  return path;
+}
+function renderSummary(record) {
+  const lines = ["### greenbump"];
+  if (!record.attempts.length) {
+    lines.push("", "No major-version bumps detected. Nothing to do.");
+    return lines.join("\n");
+  }
+  for (const a of record.attempts) {
+    const version = a.fromVersion && a.toVersion ? `${a.fromVersion} \u2192 ${a.toVersion}` : "major upgrade";
+    lines.push("", `**${a.library}** (${version}) \u2014 ${a.fixed ? "fixed \u2705" : "no fix proposed"}`, "", a.reason);
+    if (a.fixed) {
+      lines.push(
+        "",
+        "| | |",
+        "|---|---|",
+        `| Tests before | ${a.testsBefore?.failed ?? "?"} failed, ${a.testsBefore?.passed ?? "?"} passed |`,
+        `| Tests after | ${a.testsAfter?.passed ?? 0} passed |`,
+        `| Files changed | ${a.filesChanged.join(", ")} |`,
+        `| Cost | $${a.costUsd.toFixed(2)} over ${a.turns} turns |`
+      );
+    }
+  }
+  const d2 = record.delivery;
+  if (d2.mode === "pr-branch" && d2.pushed) {
+    lines.push("", `Fix pushed to this PR's branch (\`${d2.branch}\`).`);
+  } else if (d2.mode === "fix-branch" && d2.pushed) {
+    lines.push("", `Fix pushed to \`${d2.branch}\`${d2.note ? ` \u2014 ${d2.note}` : ""}. Open a PR to review.`);
+  } else if (d2.mode === "local") {
+    lines.push("", `No token available, so the fix stayed on local branch \`${d2.branch}\`.`);
+  } else if (d2.note) {
+    lines.push("", d2.note);
+  }
+  lines.push("", `Total cost $${record.totalCostUsd.toFixed(2)}.`);
+  return lines.join("\n");
+}
+
+// src/action/comment.ts
+function buildCommentBody(record) {
+  const fixed = record.attempts.filter((a) => a.fixed);
+  if (!fixed.length) return null;
+  const lines = ["### greenbump fixed this upgrade \u2705"];
+  for (const a of fixed) {
+    const version = a.fromVersion && a.toVersion ? ` ${a.fromVersion} \u2192 ${a.toVersion}` : "";
+    lines.push(
+      "",
+      `**${a.library}${version}** \u2014 ${a.reason}`,
+      "",
+      `Files changed: ${a.filesChanged.map((f) => `\`${f}\``).join(", ")}`
+    );
+  }
+  const d2 = record.delivery;
+  if (d2.mode === "pr-branch") {
+    lines.push(
+      "",
+      "The fix was pushed to this branch. Note: pushes made with the default `GITHUB_TOKEN` don't re-trigger workflows \u2014 re-run checks manually, or configure a PAT/App token in `github-token` to have them rerun automatically."
+    );
+  } else if (d2.mode === "fix-branch" && d2.branch) {
+    lines.push("", `The fix was pushed to \`${d2.branch}\` (${d2.note ?? "in-place push was not possible"}).`);
+  }
+  lines.push(
+    "",
+    `_Verified against your existing test suite; no test files were touched. Total cost $${record.totalCostUsd.toFixed(2)}._`
+  );
+  return lines.join("\n");
+}
+async function postComment(token2, repo2, prNumber, body) {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo2}/issues/${prNumber}/comments`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token2}`,
+        accept: "application/vnd.github+json",
+        "user-agent": "greenbump"
+      },
+      body: JSON.stringify({ body })
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// src/action/context.ts
+import { readFile as readFile2 } from "node:fs/promises";
+function parsePrContext(eventName, repo2, payload) {
+  if (eventName !== "pull_request" && eventName !== "pull_request_target") return null;
+  if (!repo2) return null;
+  const pr3 = payload.pull_request;
+  if (!pr3?.number || !pr3.head?.ref || !pr3.head?.sha || !pr3.base?.sha) return null;
+  return {
+    repo: repo2,
+    prNumber: pr3.number,
+    headRef: pr3.head.ref,
+    headSha: pr3.head.sha,
+    baseSha: pr3.base.sha
+  };
+}
+async function loadPrContext() {
+  const path = process.env.GITHUB_EVENT_PATH;
+  if (!path) return null;
+  let payload;
+  try {
+    payload = JSON.parse(await readFile2(path, "utf8"));
+  } catch {
+    return null;
+  }
+  return parsePrContext(process.env.GITHUB_EVENT_NAME, process.env.GITHUB_REPOSITORY, payload);
+}
+
+// src/action/deliver.ts
+function choosePushTarget(opts) {
+  const { pr: pr3, checkoutSha: checkoutSha2, remoteHeadSha, fallbackBranch: fallbackBranch2 } = opts;
+  if (!pr3) {
+    return { mode: "fix-branch", branch: fallbackBranch2, note: "not a pull_request run" };
+  }
+  if (checkoutSha2 !== pr3.headSha) {
+    return {
+      mode: "fix-branch",
+      branch: fallbackBranch2,
+      note: "checked-out commit is not the PR head \u2014 set `ref: ${{ github.head_ref }}` on actions/checkout to enable in-place fixes"
+    };
+  }
+  if (remoteHeadSha !== pr3.headSha) {
+    return {
+      mode: "fix-branch",
+      branch: fallbackBranch2,
+      note: "the PR branch moved while greenbump was running"
+    };
+  }
+  return { mode: "pr-branch", branch: pr3.headRef };
+}
+var git = (cwd2, args) => run("git", args, { cwd: cwd2, timeoutMs: 12e4 });
+async function commitFix(cwd2, files, message) {
+  await git(cwd2, ["config", "user.name", "greenbump"]);
+  await git(cwd2, ["config", "user.email", "bot@greenbump.dev"]);
+  await git(cwd2, ["add", "--", ...files]);
+  const r = await git(cwd2, ["commit", "-m", message]);
+  return r.ok;
+}
+async function remoteHead(cwd2, url2, branch) {
+  const r = await git(cwd2, ["ls-remote", url2, `refs/heads/${branch}`]);
+  const sha = r.stdout.split(/\s/)[0];
+  return r.ok && sha ? sha : null;
+}
+async function push(cwd2, url2, branch) {
+  const r = await git(cwd2, ["push", url2, `HEAD:refs/heads/${branch}`]);
+  return { ok: r.ok, stderr: r.stderr };
+}
+
+// src/action/main.ts
 var input = (name, fallback = "") => process.env[`INPUT_${name.toUpperCase().replace(/ /g, "_")}`]?.trim() || fallback;
 async function summary(md) {
   const path = process.env.GITHUB_STEP_SUMMARY;
-  if (path) await appendFile(path, md + "\n");
+  if (path) {
+    try {
+      await appendFile2(path, md + "\n");
+    } catch (err) {
+      console.warn(`greenbump: step summary: ${err.message}`);
+    }
+  }
   console.log(md.replace(/[#*`]/g, ""));
 }
-var library = input("library");
-if (!library) {
-  console.error("greenbump: `library` input is required (e.g. pydantic)");
-  process.exit(0);
-}
-var req = {
-  cwd: input("working-directory", process.env.GITHUB_WORKSPACE || process.cwd()),
-  library,
-  fromVersion: input("from-version") || void 0,
-  toVersion: input("to-version") || void 0,
-  python: input("python", "python"),
-  maxBudgetUsd: Number(input("max-cost-usd", "3")),
-  maxTurns: Number(input("max-turns", "40"))
-};
-console.log(`greenbump \xB7 ${req.library} \xB7 budget $${req.maxBudgetUsd} \xB7 max ${req.maxTurns} turns`);
-var outcome;
-try {
-  outcome = await attemptFix(req);
-} catch (err) {
-  await summary(`### greenbump
-
-Attempt errored: ${err.message}
-
-Your build is unaffected.`);
-  process.exit(0);
-}
-var cost = `$${outcome.costUsd.toFixed(2)}`;
-if (!outcome.fixed) {
-  await run("git", ["checkout", "--", "."], { cwd: req.cwd, timeoutMs: 6e4 });
-  await summary(
-    `### greenbump \u2014 no fix proposed
-
-${outcome.reason}
-
-Nothing was changed. Cost ${cost} across ${outcome.turns} turns.`
-  );
-  process.exit(0);
-}
-var branch = input("branch", `greenbump/${req.library}-${Date.now().toString(36)}`);
+var cwd = input("working-directory", process.env.GITHUB_WORKSPACE || process.cwd());
+var python = input("python", "python");
+var parsedBudget = Number(input("max-cost-usd", "3"));
+var maxBudgetUsd = Number.isFinite(parsedBudget) && parsedBudget > 0 ? parsedBudget : 3;
+var parsedTurns = Number(input("max-turns", "40"));
+var maxTurns = Number.isInteger(parsedTurns) && parsedTurns > 0 ? parsedTurns : 40;
 var token = process.env.GITHUB_TOKEN || input("github-token");
 var repo = process.env.GITHUB_REPOSITORY;
-var git = (args) => run("git", args, { cwd: req.cwd, timeoutMs: 12e4 });
-await git(["config", "user.name", "greenbump"]);
-await git(["config", "user.email", "bot@greenbump.dev"]);
-await git(["checkout", "-b", branch]);
-await git(["add", "--", ...outcome.filesChanged]);
-await git([
-  "commit",
-  "-m",
-  `fix: update code for ${req.library} ${req.toVersion ?? "major upgrade"}
+var git2 = (args) => run("git", args, { cwd, timeoutMs: 12e4 });
+var startedAt = (/* @__PURE__ */ new Date()).toISOString();
+var pr2 = await loadPrContext();
+var MANIFEST_PATHSPECS = [
+  "requirements*.txt",
+  "**/requirements*.txt",
+  "pyproject.toml",
+  "**/pyproject.toml",
+  "poetry.lock",
+  "**/poetry.lock",
+  "uv.lock",
+  "**/uv.lock",
+  "Pipfile",
+  "Pipfile.lock",
+  "**/Pipfile",
+  "**/Pipfile.lock",
+  "setup.py",
+  "setup.cfg"
+];
+async function detectBumps() {
+  const override = input("library");
+  if (override) {
+    return [
+      {
+        library: override,
+        fromVersion: input("from-version") || void 0,
+        toVersion: input("to-version") || void 0,
+        manifest: "(library input)"
+      }
+    ];
+  }
+  if (!pr2) return [];
+  await git2(["fetch", "--quiet", "--depth=1", "origin", pr2.baseSha]);
+  const diff = await git2(["diff", pr2.baseSha, "HEAD", "--", ...MANIFEST_PATHSPECS]);
+  return detectMajorBumps(diff.stdout);
+}
+var buildRecord = (attempts2, detected2, delivery2) => ({
+  schema: 1,
+  repo,
+  pr: pr2?.prNumber,
+  startedAt,
+  finishedAt: (/* @__PURE__ */ new Date()).toISOString(),
+  detected: detected2,
+  attempts: attempts2,
+  delivery: delivery2,
+  totalCostUsd: totalCost(attempts2)
+});
+async function finish(record) {
+  await writeOutcomeFile(record).catch((err) => console.warn(`greenbump: outcome file: ${err.message}`));
+  await summary(renderSummary(record));
+  process.exit(0);
+}
+var NONE = { mode: "none", pushed: false, commented: false };
+var detected = [];
+try {
+  detected = await detectBumps();
+} catch (err) {
+  console.warn(`greenbump: detection failed: ${err.message}`);
+}
+if (!detected.length) {
+  console.log("greenbump: no major-version bumps detected");
+  await finish(buildRecord([], [], NONE));
+}
+var checkoutSha = (await git2(["rev-parse", "HEAD"])).stdout.trim();
+async function untracked() {
+  const r = await git2(["ls-files", "--others", "--exclude-standard"]);
+  return new Set(r.stdout.split("\n").filter(Boolean));
+}
+var baselineUntracked = await untracked();
+async function revertWorkingTree() {
+  await git2(["checkout", "--", "."]);
+  const created = [...await untracked()].filter((f) => !baselineUntracked.has(f));
+  if (created.length) await git2(["clean", "-fq", "--", ...created]);
+}
+var attempts = [];
+var fixedLibraries = [];
+for (const bump of detected) {
+  const spent = totalCost(attempts);
+  const remaining = Math.round((maxBudgetUsd - spent) * 100) / 100;
+  const base = { library: bump.library, fromVersion: bump.fromVersion, toVersion: bump.toVersion };
+  if (remaining < 0.25) {
+    attempts.push({
+      ...base,
+      fixed: false,
+      reason: `skipped \u2014 $${spent.toFixed(2)} of the $${maxBudgetUsd} budget already spent`,
+      costUsd: 0,
+      turns: 0,
+      filesChanged: [],
+      durationMs: 0
+    });
+    continue;
+  }
+  console.log(`greenbump \xB7 ${bump.library} \xB7 budget $${remaining} \xB7 max ${maxTurns} turns`);
+  const started = Date.now();
+  let committed = false;
+  try {
+    const out = await attemptFix({
+      cwd,
+      library: bump.library,
+      fromVersion: bump.fromVersion,
+      toVersion: bump.toVersion,
+      python,
+      maxBudgetUsd: remaining,
+      maxTurns
+    });
+    attempts.push({
+      ...base,
+      fixed: out.fixed,
+      reason: out.reason,
+      costUsd: out.costUsd,
+      turns: out.turns,
+      testsBefore: out.before.counts,
+      testsAfter: out.after?.counts,
+      filesChanged: out.filesChanged,
+      durationMs: Date.now() - started
+    });
+    if (out.fixed) {
+      committed = await commitFix(
+        cwd,
+        out.filesChanged,
+        `greenbump: migrate to ${bump.library} ${bump.toVersion ?? "major upgrade"}
 
-${outcome.reason}
+${out.reason}
 
 Verified: the existing test suite passes and no test files were modified.`
-]);
-var report = (headline, footer) => summary(
-  `### greenbump \u2014 ${headline}
-
-**${req.library}${req.toVersion ? ` \u2192 ${req.toVersion}` : ""}** \xB7 ${outcome.reason}
-
-| | |
-|---|---|
-| Branch | \`${branch}\` |
-| Tests before | ${outcome.before.counts.failed} failed, ${outcome.before.counts.passed} passed |
-| Tests after | ${outcome.after?.counts.passed ?? 0} passed |
-| Files changed | ${outcome.filesChanged.join(", ")} |
-| Cost | ${cost} over ${outcome.turns} turns |
-
-${footer}`
+      );
+      if (committed) {
+        fixedLibraries.push(bump.library);
+      } else {
+        attempts[attempts.length - 1] = {
+          ...attempts[attempts.length - 1],
+          fixed: false,
+          reason: "fix verified but git commit failed"
+        };
+      }
+    }
+  } catch (err) {
+    attempts.push({
+      ...base,
+      fixed: false,
+      reason: `attempt errored: ${err.message}`,
+      costUsd: 0,
+      turns: 0,
+      filesChanged: [],
+      durationMs: Date.now() - started
+    });
+  }
+  if (!committed) await revertWorkingTree();
+}
+if (!fixedLibraries.length) {
+  await finish(buildRecord(attempts, detected, NONE));
+}
+var fallbackBranch = input(
+  "branch",
+  `greenbump/${fixedLibraries.join("-")}-${Date.now().toString(36)}`
 );
 if (!token || !repo) {
-  await report("fix verified, not pushed", `No token available, so the fix stayed on local branch \`${branch}\`.`);
-  process.exit(0);
+  await git2(["branch", fallbackBranch]);
+  await finish(
+    buildRecord(attempts, detected, {
+      mode: "local",
+      branch: fallbackBranch,
+      pushed: false,
+      commented: false,
+      note: "no token available"
+    })
+  );
 }
 var url = `https://x-access-token:${token}@github.com/${repo}.git`;
-var push = await git(["push", url, `HEAD:${branch}`]);
-if (!push.ok) {
-  await report("fix verified, push failed", `\`\`\`
-${push.stderr.slice(-400)}
-\`\`\``);
-  process.exit(0);
+var plan = choosePushTarget({
+  pr: pr2,
+  checkoutSha,
+  remoteHeadSha: pr2 ? await remoteHead(cwd, url, pr2.headRef) : null,
+  fallbackBranch
+});
+var pushed = await push(cwd, url, plan.branch);
+var delivery;
+if (pushed.ok) {
+  delivery = { mode: plan.mode, branch: plan.branch, pushed: true, commented: false, note: plan.note };
+} else if (plan.mode === "pr-branch") {
+  const retry = await push(cwd, url, fallbackBranch);
+  delivery = retry.ok ? {
+    mode: "fix-branch",
+    branch: fallbackBranch,
+    pushed: true,
+    commented: false,
+    note: "the PR branch moved while greenbump was pushing the fix"
+  } : { mode: plan.mode, branch: plan.branch, pushed: false, commented: false, note: `push failed: ${pushed.stderr.slice(-300)}` };
+} else {
+  delivery = {
+    mode: plan.mode,
+    branch: plan.branch,
+    pushed: false,
+    commented: false,
+    note: `push failed: ${pushed.stderr.slice(-300)}`
+  };
 }
-await report("fix ready \u2705", `Open a pull request from \`${branch}\` to review the diff.`);
+if (delivery.pushed && pr2 && token) {
+  const body = buildCommentBody(buildRecord(attempts, detected, delivery));
+  if (body) delivery.commented = await postComment(token, pr2.repo, pr2.prNumber, body);
+}
+await finish(buildRecord(attempts, detected, delivery));
 /*! Bundled license information:
 
 @anthropic-ai/claude-agent-sdk/sdk.mjs:

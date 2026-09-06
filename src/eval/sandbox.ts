@@ -2,7 +2,7 @@ import { mkdtemp, rm, readFile, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { run, tail } from "./exec.ts";
+import { run, tail } from "../core/exec.ts";
 
 const CLONE_MS = 180_000;
 const INSTALL_MS = 480_000;
@@ -244,6 +244,66 @@ async function runTests(dir: string, venv: string): Promise<TestResult> {
   };
 }
 
+export type PreparedCase = {
+  dir: string;
+  /** venv interpreter path — hand this to pytest or the fix agent. */
+  python: string;
+  pythonVersion: string;
+  installer: string;
+};
+
+/** Environment that points uv at the case's venv. */
+export const venvEnv = (dir: string) => ({
+  VIRTUAL_ENV: join(dir, ".venv"),
+  UV_PROJECT_ENVIRONMENT: join(dir, ".venv"),
+});
+
+/**
+ * Clone one commit and build its environment, keeping the workspace alive.
+ * The caller owns `dir` on success and must delete it; failures clean up
+ * after themselves.
+ */
+export async function prepareCase(
+  repo: string,
+  sha: string,
+): Promise<{ ok: true; prepared: PreparedCase } | { ok: false; stage: CaseProbe["stage"]; reason: string }> {
+  const dir = await mkdtemp(join(tmpdir(), "bcm-"));
+  const fail = async (stage: CaseProbe["stage"], reason: string) => {
+    await rm(dir, { recursive: true, force: true });
+    return { ok: false as const, stage, reason };
+  };
+
+  const co = await checkout(repo, sha, dir);
+  if (!co.ok) return fail("clone", co.reason ?? "clone failed");
+  if (!(await hasTests(dir))) return fail("detect", "no test files");
+
+  const python = await detectPython(dir);
+  const installer = await detectInstaller(dir);
+  if (!installer) return fail("detect", "no dependency manifest");
+
+  const venv = join(dir, ".venv");
+  let r = await run("uv", ["venv", "--python", python, venv], { cwd: dir, timeoutMs: 180_000 });
+  if (!r.ok) return fail("install", `venv ${python}: ${tail(r.stderr, 2)}`);
+
+  for (const [i, args] of installer.steps.entries()) {
+    r = await run("uv", args, { cwd: dir, timeoutMs: INSTALL_MS, env: venvEnv(dir) });
+    // Only the first step is load-bearing; extras groups are best-effort.
+    if (!r.ok && i === 0) return fail("install", r.timedOut ? "install timed out" : tail(r.stderr, 3));
+  }
+
+  // pytest itself is often only a dev-extra; install it explicitly.
+  await run("uv", ["pip", "install", "pytest", "pytest-asyncio", "anyio"], {
+    cwd: dir,
+    timeoutMs: 180_000,
+    env: venvEnv(dir),
+  });
+
+  return {
+    ok: true,
+    prepared: { dir, python: join(venv, "bin", "python"), pythonVersion: python, installer: installer.label },
+  };
+}
+
 /**
  * Clone one commit, build an isolated environment, run the suite, then delete
  * everything. Disk is the scarce resource here, so the workspace never outlives
@@ -251,61 +311,22 @@ async function runTests(dir: string, venv: string): Promise<TestResult> {
  */
 export async function probeCase(repo: string, sha: string): Promise<CaseProbe> {
   const started = Date.now();
-  const dir = await mkdtemp(join(tmpdir(), "bcm-"));
-  const done = (p: Omit<CaseProbe, "ms">): CaseProbe => ({ ...p, ms: Date.now() - started });
-
+  const prep = await prepareCase(repo, sha);
+  if (!prep.ok) {
+    return { stage: prep.stage, ok: false, reason: prep.reason, ms: Date.now() - started };
+  }
+  const { dir, pythonVersion, installer } = prep.prepared;
   try {
-    const co = await checkout(repo, sha, dir);
-    if (!co.ok) return done({ stage: "clone", ok: false, reason: co.reason });
-
-    if (!(await hasTests(dir))) {
-      return done({ stage: "detect", ok: false, reason: "no test files" });
-    }
-
-    const python = await detectPython(dir);
-    const installer = await detectInstaller(dir);
-    if (!installer) return done({ stage: "detect", ok: false, reason: "no dependency manifest", python });
-
-    const venv = join(dir, ".venv");
-    let r = await run("uv", ["venv", "--python", python, venv], { cwd: dir, timeoutMs: 180_000 });
-    if (!r.ok) {
-      return done({ stage: "install", ok: false, reason: `venv ${python}: ${tail(r.stderr, 2)}`, python, installer: installer.label });
-    }
-
-    for (const [i, args] of installer.steps.entries()) {
-      r = await run("uv", args, {
-        cwd: dir,
-        timeoutMs: INSTALL_MS,
-        env: { VIRTUAL_ENV: venv, UV_PROJECT_ENVIRONMENT: venv },
-      });
-      // Only the first step is load-bearing; extras groups are best-effort.
-      if (!r.ok && i === 0) {
-        return done({
-          stage: "install",
-          ok: false,
-          reason: r.timedOut ? "install timed out" : tail(r.stderr, 3),
-          python,
-          installer: installer.label,
-        });
-      }
-    }
-
-    // pytest itself is often only a dev-extra; install it explicitly.
-    await run("uv", ["pip", "install", "pytest", "pytest-asyncio", "anyio"], {
-      cwd: dir,
-      timeoutMs: 180_000,
-      env: { VIRTUAL_ENV: venv, UV_PROJECT_ENVIRONMENT: venv },
-    });
-
-    const test = await runTests(dir, venv);
-    return done({
+    const test = await runTests(dir, join(dir, ".venv"));
+    return {
       stage: test.ran ? "done" : "test",
       ok: test.ran && test.passed,
       reason: test.ran ? (test.passed ? undefined : "suite red at parent") : "collected no tests",
-      python,
-      installer: installer.label,
+      python: pythonVersion,
+      installer,
       test,
-    });
+      ms: Date.now() - started,
+    };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -4,12 +4,13 @@
   "description": "Fixes your code when a dependency major-version bump breaks the build",
   "main": "index.js",
   "scripts": {
-    "test": "tsx --test src/*.test.ts",
-    "mine": "tsx src/mine.ts",
-    "validate": "tsx src/validate.ts",
-    "fix": "tsx src/action.ts",
+    "test": "tsx --test src/eval/*.test.ts src/core/*.test.ts src/action/*.test.ts",
+    "mine": "tsx src/eval/mine.ts",
+    "validate": "tsx src/eval/validate.ts",
+    "eval": "tsx src/eval/run-eval.ts",
+    "fix": "tsx src/action/main.ts",
     "typecheck": "tsc --noEmit",
-    "build": "esbuild src/action.ts --bundle --platform=node --target=node20 --format=esm --outfile=dist/action.js --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\""
+    "build": "esbuild src/action/main.ts --bundle --platform=node --target=node20 --format=esm --outfile=dist/action.js --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\""
   },
   "keywords": [],
   "author": "",

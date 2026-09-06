@@ -42,6 +42,14 @@ export const TARGETS: Record<string, Target> = {
       "pydantic language:python stars:>80 pushed:>2024-06-01",
       "language:python topic:fastapi stars:>100",
       "langchain language:python stars:>100 pushed:>2024-06-01",
+      // Widened after the first validation round yielded 5/50 runnable:
+      // smaller, younger libraries have suites that still pass against
+      // today's transitive deps far more often than 2023-era app repos.
+      "pydantic language:python stars:20..80 pushed:>2025-01-01",
+      "language:python topic:pydantic stars:>20",
+      "sqlmodel language:python stars:>50 pushed:>2024-06-01",
+      "typer pydantic language:python stars:>50",
+      "settings pydantic language:python stars:>30 pushed:>2024-09-01",
     ],
   },
 

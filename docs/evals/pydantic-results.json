@@ -1,0 +1,136 @@
+{
+  "generatedAt": "2026-09-05T23:04:04.686Z",
+  "budget": 3,
+  "results": [
+    {
+      "id": "headroomlabs-ai__headroom@bb041047c8",
+      "repo": "headroomlabs-ai/headroom",
+      "sha": "905c2292512daecb1f83bd31eba8e200551c7387",
+      "result": "skipped",
+      "reason": "suite already green — no upgrade breakage to fix",
+      "costUsd": 0,
+      "turns": 0,
+      "ms": 0
+    },
+    {
+      "id": "JoshuaC215__agent-service-toolkit@978575f4ec",
+      "repo": "JoshuaC215/agent-service-toolkit",
+      "sha": "24f86d200e56c1b1f6057729a6b85ebc8e950800",
+      "result": "fixed",
+      "reason": "6 passed, 6 collected, 4 file(s) changed",
+      "costUsd": 1.19,
+      "turns": 0,
+      "ms": 0
+    },
+    {
+      "id": "yezz123__authx@405eeb2e5b",
+      "repo": "yezz123/authx",
+      "sha": "c0f1b1e709b9a22490595ebe414f08ed81973a91",
+      "result": "not-fixed",
+      "reason": "agent made no changes: repo already migrated to pydantic v2 at this commit",
+      "costUsd": 0.82,
+      "turns": 0,
+      "ms": 0
+    },
+    {
+      "id": "benavlabs__crudadmin@2e753055a2",
+      "repo": "benavlabs/crudadmin",
+      "sha": "c46a2733b1f853f6f8733ac8fa51ac9f0923a0c2",
+      "result": "skipped",
+      "reason": "suite already green — no upgrade breakage to fix",
+      "costUsd": 0,
+      "turns": 0,
+      "ms": 0
+    },
+    {
+      "id": "mauvilsa__jsonargparse@3ae77ff25d",
+      "repo": "mauvilsa/jsonargparse",
+      "sha": "cfec5a2482918627ca3771c7378a0f6b08f2223f",
+      "result": "not-fixed",
+      "reason": "suite still red (1 failed, 0 errors)",
+      "costUsd": 1.61,
+      "turns": 0,
+      "ms": 0
+    },
+    {
+      "id": "Zuehlke__ConfZ@ef46286ba2",
+      "repo": "Zuehlke/ConfZ",
+      "sha": "30f7e0117a9566e6f92fe75966441a51e7a9d7af",
+      "result": "fixed",
+      "reason": "43 passed, 43 collected, 2 file(s) changed",
+      "costUsd": 2.07,
+      "turns": 0,
+      "ms": 0
+    },
+    {
+      "id": "graphql-python__graphene-pydantic@e03a5c871e",
+      "repo": "graphql-python/graphene-pydantic",
+      "sha": "1fdf0010fadff702d3d320f44b3ef2bcbb5f2328",
+      "result": "not-fixed",
+      "reason": "suite still red (3 failed, 0 errors)",
+      "costUsd": 2.34,
+      "turns": 0,
+      "ms": 0
+    },
+    {
+      "id": "ddanier__pydantic-partial@108e525413",
+      "repo": "ddanier/pydantic-partial",
+      "sha": "3398fd63719c7ad1e21d7129d4dc264ec1900dab",
+      "result": "skipped",
+      "reason": "suite already green — no upgrade breakage to fix",
+      "costUsd": 0,
+      "turns": 0,
+      "ms": 0
+    },
+    {
+      "id": "lnbits__lnurl@1cf7274401",
+      "repo": "lnbits/lnurl",
+      "sha": "3c78450ccae1232de3c3e2217094d2ceaa105d52",
+      "result": "not-fixed",
+      "reason": "budget exhausted ($3) before the suite went green",
+      "costUsd": 3,
+      "turns": 0,
+      "ms": 0
+    },
+    {
+      "id": "dhvcc__rss-parser@a760fb38f8",
+      "repo": "dhvcc/rss-parser",
+      "sha": "1d77d466fa08f2dfa19f15bffc2b8fb630fed318",
+      "result": "fixed",
+      "reason": "16 passed, 16 collected, 5 file(s) changed",
+      "costUsd": 1.8354939999999997,
+      "turns": 20,
+      "ms": 388488
+    },
+    {
+      "id": "jtc42__fastapi-hypermodel@0748b1e9b9",
+      "repo": "jtc42/fastapi-hypermodel",
+      "sha": "71dbe813647156235e9e44902751ab3d5dc1133f",
+      "result": "not-fixed",
+      "reason": "rejected — agent modified tests: tests/app.py",
+      "costUsd": 2.0367835000000003,
+      "turns": 22,
+      "ms": 458734
+    },
+    {
+      "id": "surenkov__django-pydantic-field@02b2cda652",
+      "repo": "surenkov/django-pydantic-field",
+      "sha": "fb6c844e692d7c5e29d9678354bd3215c90e9952",
+      "result": "skipped",
+      "reason": "suite already green — no upgrade breakage to fix",
+      "costUsd": 0,
+      "turns": 0,
+      "ms": 5594
+    },
+    {
+      "id": "phalt__clientele@c5f4f8cd0b",
+      "repo": "phalt/clientele",
+      "sha": "a44dc12d41b336d95ebd214c89abe0cb93b6508a",
+      "result": "skipped",
+      "reason": "suite already green — no upgrade breakage to fix",
+      "costUsd": 0,
+      "turns": 0,
+      "ms": 10573
+    }
+  ]
+}

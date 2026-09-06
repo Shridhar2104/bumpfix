@@ -62,7 +62,7 @@ export async function runPytest(opts: PytestOpts): Promise<TestResult> {
 export async function collectCount(opts: PytestOpts): Promise<number> {
   const r = await run(
     opts.python ?? "python",
-    ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
+    ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", ...(opts.args ?? [])],
     { cwd: opts.cwd, timeoutMs: 120_000, env: { PYTHONDONTWRITEBYTECODE: "1", CI: "1" } },
   );
   const m = `${r.stdout}\n${r.stderr}`.match(/(\d+) tests? collected/);

@@ -11,13 +11,16 @@ branding:
 
 inputs:
   library:
-    description: Package whose major version changed, e.g. pydantic
-    required: true
+    description: >
+      Override auto-detection and fix this package regardless of the PR diff.
+      By default greenbump reads the PR's manifest changes and finds
+      major-version bumps itself.
+    required: false
   from-version:
-    description: Version being upgraded from (improves accuracy)
+    description: Version being upgraded from (only with `library`; improves accuracy)
     required: false
   to-version:
-    description: Version being upgraded to (improves accuracy)
+    description: Version being upgraded to (only with `library`; improves accuracy)
     required: false
   python:
     description: Interpreter that has the project's dependencies installed
@@ -28,20 +31,26 @@ inputs:
     required: false
     default: ${{ github.workspace }}
   max-cost-usd:
-    description: Hard ceiling on spend for this attempt. The run is abandoned rather than exceeding it.
+    description: Hard ceiling on spend for this run, shared across all detected bumps. The run is abandoned rather than exceeding it.
     required: false
     default: "3"
   max-turns:
-    description: Maximum agent turns before giving up
+    description: Maximum agent turns per attempt before giving up
     required: false
     default: "40"
   branch:
-    description: Branch to push the verified fix to. Defaults to a generated name.
+    description: Fallback branch for the fix when pushing to the PR branch is not possible. Defaults to a generated name.
     required: false
   github-token:
-    description: Token used to push the fix branch. Needs contents:write.
+    description: Token used to push the fix and comment on the PR. Needs contents:write and pull-requests:write.
     required: false
     default: ${{ github.token }}
+
+outputs:
+  outcome-file:
+    description: Path to a JSON record of everything greenbump did this run.
+  fixed:
+    description: '"true" when a verified fix was committed.'
 
 runs:
   using: node20
