@@ -7,6 +7,12 @@ Dependabot opens a PR bumping `pydantic` to v2. Your suite goes red. A few
 minutes later a commit lands on that same PR migrating your code to the new
 API, ready for your checks to rerun green. That's the whole product.
 
+**See it on a real PR:** [greenbump-demo#1](https://github.com/Shridhar2104/greenbump-demo/pull/1)
+— a pydantic 1.10 → 2.9 bump turns the suite red, and greenbump's commit
+migrates two source files (`@validator` → `@field_validator`, `const=` →
+`Literal`, `.dict()` → `model_dump`, …) back to 10/10 green. $0.39, 5 turns,
+no test file touched.
+
 ## How it works
 
 1. A PR changes a Python manifest (`requirements.txt`, `pyproject.toml`,
