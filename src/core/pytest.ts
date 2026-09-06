@@ -45,7 +45,8 @@ export async function runPytest(opts: PytestOpts): Promise<TestResult> {
   );
   const out = `${r.stdout}\n${r.stderr}`;
   return {
-    ran: r.code !== 5 && !r.timedOut,
+    // null code = the interpreter itself failed to spawn; exit 5 = nothing collected.
+    ran: r.code !== 5 && r.code !== null && !r.timedOut,
     passed: r.code === 0,
     counts: parsePytest(out),
     exitCode: r.code,
@@ -55,18 +56,33 @@ export async function runPytest(opts: PytestOpts): Promise<TestResult> {
   };
 }
 
+export type CollectedTests = { count: number; ids: Set<string> };
+
+/** Node-id lines from `pytest --collect-only -q` output. */
+export function parseCollectedNodes(out: string): string[] {
+  return out
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.includes("::"));
+}
+
 /**
- * How many tests pytest can collect. Compared before and after a fix so an
- * agent cannot turn the suite green by removing tests from it.
+ * What pytest would actually run. Compared before and after a fix so an agent
+ * cannot turn the suite green by shrinking it — deleting tests, or deselecting
+ * them via config edits (`-k`, `--ignore`, `addopts`). Ids are the real check;
+ * the count is a fallback for pytest versions/plugins that print no node ids.
+ * On "45/50 tests collected (5 deselected)" the SELECTED number is what runs.
  */
-export async function collectCount(opts: PytestOpts): Promise<number> {
+export async function collectTests(opts: PytestOpts): Promise<CollectedTests> {
   const r = await run(
     opts.python ?? "python",
     ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", ...(opts.args ?? [])],
     { cwd: opts.cwd, timeoutMs: 120_000, env: { PYTHONDONTWRITEBYTECODE: "1", CI: "1" } },
   );
-  const m = `${r.stdout}\n${r.stderr}`.match(/(\d+) tests? collected/);
-  if (m) return Number(m[1]);
-  // Older pytest prints one node id per line and no summary.
-  return r.stdout.split("\n").filter((l) => l.includes("::")).length;
+  const out = `${r.stdout}\n${r.stderr}`;
+  const ids = new Set(parseCollectedNodes(r.stdout));
+  const selected = out.match(/(\d+)\/\d+ tests? collected/);
+  const total = out.match(/(\d+) tests? collected/);
+  const count = selected ? Number(selected[1]) : total ? Number(total[1]) : ids.size;
+  return { count, ids };
 }

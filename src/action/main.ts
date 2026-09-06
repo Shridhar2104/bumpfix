@@ -1,7 +1,7 @@
 import { appendFile } from "node:fs/promises";
 import { attemptFix } from "../core/agent.ts";
 import { detectMajorBumps, type DetectedBump } from "../core/detect.ts";
-import { run } from "../core/exec.ts";
+import { run, tail } from "../core/exec.ts";
 import {
   renderSummary,
   totalCost,
@@ -24,6 +24,18 @@ import { choosePushTarget, commitFix, push, remoteHead } from "./deliver.ts";
  * It must never fail their build. Every path exits 0.
  */
 
+// Last-resort net for the exit-0 contract: anything that escapes the guarded
+// regions (an SDK background rejection, an unexpected throw in delivery) must
+// still not fail the customer's build.
+process.on("uncaughtException", (err) => {
+  console.warn(`greenbump: unexpected error: ${err?.message ?? err}. Your build is unaffected.`);
+  process.exit(0);
+});
+process.on("unhandledRejection", (err) => {
+  console.warn(`greenbump: unexpected rejection: ${(err as Error)?.message ?? err}. Your build is unaffected.`);
+  process.exit(0);
+});
+
 const input = (name: string, fallback = "") =>
   process.env[`INPUT_${name.toUpperCase().replace(/ /g, "_")}`]?.trim() || fallback;
 
@@ -42,17 +54,24 @@ async function summary(md: string) {
 const cwd = input("working-directory", process.env.GITHUB_WORKSPACE || process.cwd());
 const python = input("python", "python");
 
-// Malformed numeric inputs must not silently defeat the budget cap.
+// Malformed numeric inputs must not silently defeat the budget cap. An
+// explicit "0" is a real ceiling — detection-only, no spend — not malformed.
 const parsedBudget = Number(input("max-cost-usd", "3"));
-const maxBudgetUsd = Number.isFinite(parsedBudget) && parsedBudget > 0 ? parsedBudget : 3;
+const maxBudgetUsd = Number.isFinite(parsedBudget) && parsedBudget >= 0 ? parsedBudget : 3;
 const parsedTurns = Number(input("max-turns", "40"));
 const maxTurns =
   Number.isInteger(parsedTurns) && parsedTurns > 0 ? parsedTurns : 40;
 
-const token = process.env.GITHUB_TOKEN || input("github-token");
+// The explicit input wins: an ambient GITHUB_TOKEN env var (workflows often
+// export one globally for gh) must not override a deliberately supplied PAT.
+const token = input("github-token") || process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;
 
-const git = (args: string[]) => run("git", args, { cwd, timeoutMs: 120_000 });
+// git paths (status --porcelain, pathspecs) are repo-root-relative, so every
+// git call runs from the toplevel even when working-directory is a subdir.
+const rootProbe = await run("git", ["rev-parse", "--show-toplevel"], { cwd, timeoutMs: 30_000 });
+const repoRoot = rootProbe.stdout.trim() || cwd;
+const git = (args: string[]) => run("git", args, { cwd: repoRoot, timeoutMs: 120_000 });
 
 const startedAt = new Date().toISOString();
 const pr = await loadPrContext();
@@ -79,8 +98,12 @@ async function detectBumps(): Promise<DetectedBump[]> {
     ];
   }
   if (!pr) return [];
-  await git(["fetch", "--quiet", "--depth=1", "origin", pr.baseSha]);
+  const fetch = await git(["fetch", "--quiet", "--depth=1", "origin", pr.baseSha]);
+  if (!fetch.ok) console.warn(`greenbump: base fetch failed: ${tail(fetch.stderr, 3)}`);
   const diff = await git(["diff", pr.baseSha, "HEAD", "--", ...MANIFEST_PATHSPECS]);
+  // run() never throws, so a failed diff must be surfaced here — otherwise an
+  // unfetchable base silently reads as "no bumps detected".
+  if (!diff.ok) throw new Error(`could not diff against the PR base: ${tail(diff.stderr, 3)}`);
   return detectMajorBumps(diff.stdout);
 }
 
@@ -109,13 +132,21 @@ async function finish(record: OutcomeRecord): Promise<never> {
 const NONE: DeliveryOutcome = { mode: "none", pushed: false, commented: false };
 
 let detected: DetectedBump[] = [];
+let detectionError: string | undefined;
 try {
   detected = await detectBumps();
 } catch (err) {
-  console.warn(`greenbump: detection failed: ${(err as Error).message}`);
+  detectionError = (err as Error).message;
+  console.warn(`greenbump: detection failed: ${detectionError}`);
 }
 
 if (!detected.length) {
+  if (detectionError) {
+    // Not the same outcome as "no bumps": say so instead of claiming a scan.
+    await writeOutcomeFile(buildRecord([], [], NONE)).catch(() => {});
+    await summary(`### greenbump\n\nDetection failed: ${detectionError}\n\nNothing was changed and your build is unaffected.`);
+    process.exit(0);
+  }
   console.log("greenbump: no major-version bumps detected");
   await finish(buildRecord([], [], NONE));
 }

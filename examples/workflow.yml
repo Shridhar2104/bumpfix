@@ -25,6 +25,10 @@ permissions:
 
 jobs:
   fix:
+    # Same-repo PRs only (Dependabot included): on fork PRs the head_ref
+    # checkout below would fail — the fork's branch doesn't exist here — and
+    # secrets aren't available to fork PRs anyway.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

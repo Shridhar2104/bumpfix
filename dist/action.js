@@ -32045,11 +32045,12 @@ function run(cmd, args, opts = {}) {
       },
       (err, stdout, stderr) => {
         const e = err;
+        const spawnFailed = typeof e?.code === "string";
         resolve5({
           ok: !e,
-          code: typeof e?.code === "number" ? e.code : e ? 1 : 0,
+          code: typeof e?.code === "number" ? e.code : spawnFailed ? null : e ? 1 : 0,
           stdout: stdout ?? "",
-          stderr: stderr ?? "",
+          stderr: (stderr ?? "") || (spawnFailed ? e.message : ""),
           timedOut: Boolean(e?.killed),
           ms: Date.now() - started
         });
@@ -32082,7 +32083,8 @@ async function runPytest(opts) {
   const out = `${r.stdout}
 ${r.stderr}`;
   return {
-    ran: r.code !== 5 && !r.timedOut,
+    // null code = the interpreter itself failed to spawn; exit 5 = nothing collected.
+    ran: r.code !== 5 && r.code !== null && !r.timedOut,
     passed: r.code === 0,
     counts: parsePytest(out),
     exitCode: r.code,
@@ -32091,28 +32093,35 @@ ${r.stderr}`;
     output: tail(out, opts.outputLines ?? 40)
   };
 }
-async function collectCount(opts) {
+function parseCollectedNodes(out) {
+  return out.split("\n").map((l) => l.trim()).filter((l) => l.includes("::"));
+}
+async function collectTests(opts) {
   const r = await run(
     opts.python ?? "python",
     ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", ...opts.args ?? []],
     { cwd: opts.cwd, timeoutMs: 12e4, env: { PYTHONDONTWRITEBYTECODE: "1", CI: "1" } }
   );
-  const m = `${r.stdout}
-${r.stderr}`.match(/(\d+) tests? collected/);
-  if (m) return Number(m[1]);
-  return r.stdout.split("\n").filter((l) => l.includes("::")).length;
+  const out = `${r.stdout}
+${r.stderr}`;
+  const ids = new Set(parseCollectedNodes(r.stdout));
+  const selected = out.match(/(\d+)\/\d+ tests? collected/);
+  const total = out.match(/(\d+) tests? collected/);
+  const count = selected ? Number(selected[1]) : total ? Number(total[1]) : ids.size;
+  return { count, ids };
 }
 
 // src/core/agent.ts
 var TEST_PATH = /(^|\/)(tests?|testing)\//i;
-var TEST_FILE = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py)$/i;
+var TEST_FILE = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py|pytest\.ini|tox\.ini)$/i;
 var isTestFile = (p) => TEST_PATH.test(p) || TEST_FILE.test(p);
 var ARTIFACT = /(^|\/)(__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.tox|node_modules|\.venv|venv|[^/]*\.egg-info)\/|\.py[co]$|(^|\/)\.DS_Store$/i;
-async function changedFiles(cwd2) {
-  const r = await run("git", ["status", "--porcelain", "--untracked-files=all"], {
-    cwd: cwd2,
-    timeoutMs: 3e4
-  });
+async function dirtyPaths(cwd2) {
+  const r = await run(
+    "git",
+    ["-c", "core.quotepath=off", "status", "--porcelain", "--untracked-files=all"],
+    { cwd: cwd2, timeoutMs: 3e4 }
+  );
   return r.stdout.split("\n").filter(Boolean).map((line) => {
     const path = line.slice(3).trim();
     const arrow = path.indexOf(" -> ");
@@ -32168,7 +32177,13 @@ async function attemptFix(req) {
   };
   if (!before.ran) return { ...base, fixed: false, reason: "no tests collected \u2014 nothing to verify against" };
   if (before.passed) return { ...base, fixed: false, reason: "suite already green \u2014 no upgrade breakage to fix" };
-  const countBefore = await collectCount(testOpts);
+  const collectedBefore = await collectTests(testOpts);
+  const preDirty = new Set(await dirtyPaths(req.cwd));
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([k3]) => k3 !== "GITHUB_TOKEN" && k3 !== "GH_TOKEN" && !k3.startsWith("INPUT_")
+    )
+  );
   let costUsd = 0;
   let turns = 0;
   let finalText = "";
@@ -32176,6 +32191,7 @@ async function attemptFix(req) {
     prompt: buildPrompt(req, before.output),
     options: {
       cwd: req.cwd,
+      env,
       model: "claude-opus-5",
       permissionMode: "bypassPermissions",
       maxTurns: req.maxTurns,
@@ -32197,13 +32213,13 @@ async function attemptFix(req) {
     const capped = /maximum budget/i.test(msg);
     return {
       ...base,
-      costUsd: capped ? req.maxBudgetUsd : costUsd,
+      costUsd: req.maxBudgetUsd,
       turns,
       fixed: false,
-      reason: capped ? `budget exhausted ($${req.maxBudgetUsd}) before the suite went green` : `agent run failed: ${msg.slice(0, 200)}`
+      reason: capped ? `budget exhausted ($${req.maxBudgetUsd}) before the suite went green` : `agent run failed (spend unknown, assuming full budget): ${msg.slice(0, 200)}`
     };
   }
-  const filesChanged = await changedFiles(req.cwd);
+  const filesChanged = (await dirtyPaths(req.cwd)).filter((p) => !preDirty.has(p));
   const withCost = { ...base, costUsd, turns, filesChanged };
   if (!filesChanged.length) {
     return { ...withCost, fixed: false, reason: `agent made no changes${finalText ? `: ${finalText.slice(0, 200)}` : ""}` };
@@ -32216,28 +32232,67 @@ async function attemptFix(req) {
   if (!after.passed) {
     return { ...withCost, after, fixed: false, reason: `suite still red (${after.counts.failed} failed, ${after.counts.errors} errors)` };
   }
-  const countAfter = await collectCount(testOpts);
-  if (countAfter < countBefore) {
+  const collectedAfter = await collectTests(testOpts);
+  const missing = [...collectedBefore.ids].filter((id2) => !collectedAfter.ids.has(id2));
+  const shrunk = collectedBefore.ids.size ? missing.length > 0 : collectedAfter.count < collectedBefore.count;
+  if (shrunk) {
     return {
       ...withCost,
       after,
       fixed: false,
-      reason: `rejected \u2014 collected tests dropped ${countBefore} \u2192 ${countAfter}`
+      reason: missing.length ? `rejected \u2014 tests no longer collected: ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? ` (+${missing.length - 3} more)` : ""}` : `rejected \u2014 collected tests dropped ${collectedBefore.count} \u2192 ${collectedAfter.count}`
     };
+  }
+  const reverted = await upgradeReverted(req);
+  if (reverted) {
+    return { ...withCost, after, fixed: false, reason: `rejected \u2014 ${reverted}` };
   }
   return {
     ...withCost,
     after,
     fixed: true,
-    reason: `${after.counts.passed} passed, ${countAfter} collected, ${filesChanged.length} file(s) changed`
+    reason: `${after.counts.passed} passed, ${collectedAfter.count} collected, ${filesChanged.length} file(s) changed`
   };
+}
+async function upgradeReverted(req) {
+  const wantMajor = Number(req.toVersion?.match(/^v?(\d+)/)?.[1] ?? NaN);
+  const fromMajor = Number(req.fromVersion?.match(/^v?(\d+)/)?.[1] ?? NaN);
+  if (!Number.isFinite(wantMajor) && !Number.isFinite(fromMajor)) return null;
+  const r = await run(
+    req.python ?? "python",
+    ["-c", `import importlib.metadata as m; print(m.version(${JSON.stringify(req.library)}))`],
+    { cwd: req.cwd, timeoutMs: 3e4 }
+  );
+  const installed = r.stdout.trim();
+  const major2 = Number(installed.match(/^v?(\d+)/)?.[1] ?? NaN);
+  if (!r.ok || !Number.isFinite(major2)) return null;
+  const tooOld = Number.isFinite(wantMajor) ? major2 < wantMajor : major2 <= fromMajor;
+  return tooOld ? `${req.library} is at ${installed} \u2014 the upgrade was reverted, not fixed` : null;
 }
 
 // src/core/detect.ts
 var MANIFEST = /(^|\/)(requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile|Pipfile\.lock|setup\.py|setup\.cfg)$/;
 var LOCKFILE = /(^|\/)(poetry\.lock|uv\.lock)$/;
 var norm = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
-var IGNORE = /* @__PURE__ */ new Set(["version", "python", "python-version", "python-full-version", "name"]);
+var IGNORE = /* @__PURE__ */ new Set([
+  "version",
+  "python",
+  "python-version",
+  "python-full-version",
+  "name",
+  "default",
+  "develop",
+  "-meta",
+  "sources",
+  "requires",
+  "hash",
+  "hashes",
+  "markers",
+  "extras"
+]);
+var PIPFILE_LOCK = /(^|\/)Pipfile\.lock$/;
+var JSON_NAME = /^"([A-Za-z0-9._-]+)":\s*\{/;
+var JSON_VERSION = /^"version":\s*"==?v?(\d+(?:\.\d+)*)"/;
 var major = (v) => {
   const m = v.match(/^v?(\d+)/);
   return m ? Number(m[1]) : null;
@@ -32250,8 +32305,10 @@ var LOCK_VERSION = /^version\s*=\s*["']v?(\d+(?:\.\d+)*)["']/;
 function detectMajorBumps(diff) {
   const byPkg = /* @__PURE__ */ new Map();
   let file = "";
+  let oldFile = "";
   let inManifest = false;
   let inLockfile = false;
+  let inPipfileLock = false;
   let lockContext = "";
   const record = (name, version, side) => {
     const key = norm(name);
@@ -32262,25 +32319,31 @@ function detectMajorBumps(diff) {
     byPkg.set(key, entry);
   };
   for (const raw of diff.split("\n")) {
+    if (raw.startsWith("--- ")) {
+      oldFile = raw.replace(/^--- (a\/)?/, "").trim();
+      continue;
+    }
     if (raw.startsWith("+++ ")) {
-      file = raw.replace(/^\+\+\+ (b\/)?/, "").trim();
+      const newFile = raw.replace(/^\+\+\+ (b\/)?/, "").trim();
+      file = newFile !== "/dev/null" ? newFile : oldFile;
       inManifest = file !== "/dev/null" && MANIFEST.test(file);
       inLockfile = inManifest && LOCKFILE.test(file);
+      inPipfileLock = inManifest && PIPFILE_LOCK.test(file);
       lockContext = "";
       continue;
     }
-    if (raw.startsWith("--- ") || !inManifest) continue;
+    if (!inManifest) continue;
     const sign = raw[0];
     if (sign !== "+" && sign !== "-" && sign !== " ") continue;
     const line = raw.slice(1).trim();
-    const name = inLockfile ? line.match(LOCK_NAME) : null;
+    const name = inLockfile ? line.match(LOCK_NAME) : inPipfileLock && !JSON_DEP_LINE.test(line) ? line.match(JSON_NAME) : null;
     if (name) {
       lockContext = name[1];
       continue;
     }
     if (sign === " ") continue;
     const side = sign === "-" ? "removed" : "added";
-    const lockVer = inLockfile ? line.match(LOCK_VERSION) : null;
+    const lockVer = inLockfile ? line.match(LOCK_VERSION) : inPipfileLock ? line.match(JSON_VERSION) : null;
     if (lockVer && lockContext) {
       record(lockContext, lockVer[1], side);
       continue;
@@ -32310,15 +32373,19 @@ import { tmpdir } from "node:os";
 import { join as join5 } from "node:path";
 var totalCost = (attempts2) => Math.round(attempts2.reduce((sum, a) => sum + a.costUsd, 0) * 100) / 100;
 async function writeOutcomeFile(record) {
-  const path = join5(process.env.RUNNER_TEMP || tmpdir(), "greenbump-outcome.json");
-  await writeFile(path, JSON.stringify(record, null, 2) + "\n");
   if (process.env.GITHUB_OUTPUT) {
     await appendFile(
       process.env.GITHUB_OUTPUT,
-      `outcome-file=${path}
-fixed=${record.attempts.some((a) => a.fixed)}
+      `fixed=${record.attempts.some((a) => a.fixed)}
 `
-    );
+    ).catch(() => {
+    });
+  }
+  const path = join5(process.env.RUNNER_TEMP || tmpdir(), "greenbump-outcome.json");
+  await writeFile(path, JSON.stringify(record, null, 2) + "\n");
+  if (process.env.GITHUB_OUTPUT) {
+    await appendFile(process.env.GITHUB_OUTPUT, `outcome-file=${path}
+`);
   }
   return path;
 }
@@ -32454,10 +32521,12 @@ function choosePushTarget(opts) {
 }
 var git = (cwd2, args) => run("git", args, { cwd: cwd2, timeoutMs: 12e4 });
 async function commitFix(cwd2, files, message) {
-  await git(cwd2, ["config", "user.name", "greenbump"]);
-  await git(cwd2, ["config", "user.email", "bot@greenbump.dev"]);
-  await git(cwd2, ["add", "--", ...files]);
-  const r = await git(cwd2, ["commit", "-m", message]);
+  const top = await git(cwd2, ["rev-parse", "--show-toplevel"]);
+  const root = top.stdout.trim() || cwd2;
+  await git(root, ["config", "user.name", "greenbump"]);
+  await git(root, ["config", "user.email", "bot@greenbump.dev"]);
+  await git(root, ["add", "--", ...files]);
+  const r = await git(root, ["commit", "-m", message]);
   return r.ok;
 }
 async function remoteHead(cwd2, url2, branch) {
@@ -32471,6 +32540,14 @@ async function push(cwd2, url2, branch) {
 }
 
 // src/action/main.ts
+process.on("uncaughtException", (err) => {
+  console.warn(`greenbump: unexpected error: ${err?.message ?? err}. Your build is unaffected.`);
+  process.exit(0);
+});
+process.on("unhandledRejection", (err) => {
+  console.warn(`greenbump: unexpected rejection: ${err?.message ?? err}. Your build is unaffected.`);
+  process.exit(0);
+});
 var input = (name, fallback = "") => process.env[`INPUT_${name.toUpperCase().replace(/ /g, "_")}`]?.trim() || fallback;
 async function summary(md) {
   const path = process.env.GITHUB_STEP_SUMMARY;
@@ -32486,12 +32563,14 @@ async function summary(md) {
 var cwd = input("working-directory", process.env.GITHUB_WORKSPACE || process.cwd());
 var python = input("python", "python");
 var parsedBudget = Number(input("max-cost-usd", "3"));
-var maxBudgetUsd = Number.isFinite(parsedBudget) && parsedBudget > 0 ? parsedBudget : 3;
+var maxBudgetUsd = Number.isFinite(parsedBudget) && parsedBudget >= 0 ? parsedBudget : 3;
 var parsedTurns = Number(input("max-turns", "40"));
 var maxTurns = Number.isInteger(parsedTurns) && parsedTurns > 0 ? parsedTurns : 40;
-var token = process.env.GITHUB_TOKEN || input("github-token");
+var token = input("github-token") || process.env.GITHUB_TOKEN;
 var repo = process.env.GITHUB_REPOSITORY;
-var git2 = (args) => run("git", args, { cwd, timeoutMs: 12e4 });
+var rootProbe = await run("git", ["rev-parse", "--show-toplevel"], { cwd, timeoutMs: 3e4 });
+var repoRoot = rootProbe.stdout.trim() || cwd;
+var git2 = (args) => run("git", args, { cwd: repoRoot, timeoutMs: 12e4 });
 var startedAt = (/* @__PURE__ */ new Date()).toISOString();
 var pr2 = await loadPrContext();
 var MANIFEST_PATHSPECS = [
@@ -32523,8 +32602,10 @@ async function detectBumps() {
     ];
   }
   if (!pr2) return [];
-  await git2(["fetch", "--quiet", "--depth=1", "origin", pr2.baseSha]);
+  const fetch2 = await git2(["fetch", "--quiet", "--depth=1", "origin", pr2.baseSha]);
+  if (!fetch2.ok) console.warn(`greenbump: base fetch failed: ${tail(fetch2.stderr, 3)}`);
   const diff = await git2(["diff", pr2.baseSha, "HEAD", "--", ...MANIFEST_PATHSPECS]);
+  if (!diff.ok) throw new Error(`could not diff against the PR base: ${tail(diff.stderr, 3)}`);
   return detectMajorBumps(diff.stdout);
 }
 var buildRecord = (attempts2, detected2, delivery2) => ({
@@ -32545,12 +32626,24 @@ async function finish(record) {
 }
 var NONE = { mode: "none", pushed: false, commented: false };
 var detected = [];
+var detectionError;
 try {
   detected = await detectBumps();
 } catch (err) {
-  console.warn(`greenbump: detection failed: ${err.message}`);
+  detectionError = err.message;
+  console.warn(`greenbump: detection failed: ${detectionError}`);
 }
 if (!detected.length) {
+  if (detectionError) {
+    await writeOutcomeFile(buildRecord([], [], NONE)).catch(() => {
+    });
+    await summary(`### greenbump
+
+Detection failed: ${detectionError}
+
+Nothing was changed and your build is unaffected.`);
+    process.exit(0);
+  }
   console.log("greenbump: no major-version bumps detected");
   await finish(buildRecord([], [], NONE));
 }
