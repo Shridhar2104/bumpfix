@@ -1,5 +1,5 @@
 # What a customer adds to their repo. This is the whole onboarding.
-name: greenbump
+name: bumpfix
 
 on:
   pull_request:
@@ -33,18 +33,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Check out the PR branch itself (not the merge ref) so greenbump
+          # Check out the PR branch itself (not the merge ref) so bumpfix
           # can push the verified fix onto this PR.
           ref: ${{ github.head_ref }}
 
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
 
-      # Your normal install step — greenbump reuses the environment your CI
+      # Your normal install step — bumpfix reuses the environment your CI
       # already knows how to build.
       - run: pip install -r requirements.txt pytest
 
-      - uses: Shridhar2104/greenbump@v1
+      - uses: Shridhar2104/bumpfix@v1
         env:
           # For Dependabot PRs this must also be added under
           # Settings → Secrets → Dependabot.

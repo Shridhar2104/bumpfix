@@ -1,9 +1,9 @@
-name: greenbump
+name: bumpfix
 description: >
   When a dependency's major-version bump breaks your build, fix the code.
   Runs in your own CI, verifies against your existing tests, and stays silent
   unless the suite actually passes.
-author: greenbump
+author: bumpfix
 
 branding:
   icon: check-circle
@@ -13,7 +13,7 @@ inputs:
   library:
     description: >
       Override auto-detection and fix this package regardless of the PR diff.
-      By default greenbump reads the PR's manifest changes and finds
+      By default bumpfix reads the PR's manifest changes and finds
       major-version bumps itself.
     required: false
   from-version:
@@ -48,7 +48,7 @@ inputs:
 
 outputs:
   outcome-file:
-    description: Path to a JSON record of everything greenbump did this run.
+    description: Path to a JSON record of everything bumpfix did this run.
   fixed:
     description: '"true" when a verified fix was committed.'
 

@@ -10,7 +10,7 @@ export type PushPlan = { mode: "pr-branch" | "fix-branch"; branch: string; note?
  */
 export function choosePushTarget(opts: {
   pr: PrContext | null;
-  /** HEAD at the moment the action started, before greenbump committed. */
+  /** HEAD at the moment the action started, before bumpfix committed. */
   checkoutSha: string;
   /** Remote sha of the PR head branch right now, null when unreadable. */
   remoteHeadSha: string | null;
@@ -32,7 +32,7 @@ export function choosePushTarget(opts: {
     return {
       mode: "fix-branch",
       branch: fallbackBranch,
-      note: "the PR branch moved while greenbump was running",
+      note: "the PR branch moved while bumpfix was running",
     };
   }
   return { mode: "pr-branch", branch: pr.headRef };
@@ -46,8 +46,8 @@ export async function commitFix(cwd: string, files: string[], message: string): 
   // for e.g. backend/backend/app.py and silently lose the fix.
   const top = await git(cwd, ["rev-parse", "--show-toplevel"]);
   const root = top.stdout.trim() || cwd;
-  await git(root, ["config", "user.name", "greenbump"]);
-  await git(root, ["config", "user.email", "bot@greenbump.dev"]);
+  await git(root, ["config", "user.name", "bumpfix"]);
+  await git(root, ["config", "user.email", "bot@bumpfix.dev"]);
   await git(root, ["add", "--", ...files]);
   const r = await git(root, ["commit", "-m", message]);
   return r.ok;

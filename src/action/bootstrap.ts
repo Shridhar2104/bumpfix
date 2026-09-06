@@ -27,18 +27,18 @@ export async function ensureClaudeBinary(): Promise<string | null> {
     // bundled run — fall through to the install path
   }
 
-  const prefix = join(process.env.RUNNER_TEMP || tmpdir(), "greenbump-cli");
+  const prefix = join(process.env.RUNNER_TEMP || tmpdir(), "bumpfix-cli");
   const binary = join(prefix, "node_modules", pkg, BIN);
   if (existsSync(binary)) return binary;
 
-  console.log(`greenbump: fetching agent runtime (${pkg}@${SDK_VERSION})…`);
+  console.log(`bumpfix: fetching agent runtime (${pkg}@${SDK_VERSION})…`);
   const r = await run(
     "npm",
     ["install", "--prefix", prefix, "--no-save", "--no-audit", "--no-fund", `${pkg}@${SDK_VERSION}`],
     { timeoutMs: 300_000 },
   );
   if (!r.ok || !existsSync(binary)) {
-    console.warn(`greenbump: could not fetch agent runtime: ${tail(r.stderr, 3)}`);
+    console.warn(`bumpfix: could not fetch agent runtime: ${tail(r.stderr, 3)}`);
     return null;
   }
   return binary;
