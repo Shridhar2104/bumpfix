@@ -10,7 +10,7 @@
     "eval": "tsx src/eval/run-eval.ts",
     "fix": "tsx src/action/main.ts",
     "typecheck": "tsc --noEmit",
-    "build": "esbuild src/action/main.ts --bundle --platform=node --target=node20 --format=esm --outfile=dist/action.js --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\""
+    "build": "esbuild src/action/main.ts --bundle --platform=node --target=node20 --format=esm --outfile=dist/action.js --banner:js=\"import{createRequire as __gbCreateRequire}from'module';const require=__gbCreateRequire(import.meta.url);\""
   },
   "keywords": [],
   "author": "",

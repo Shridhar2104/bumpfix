@@ -11,6 +11,7 @@ import {
   type OutcomeRecord,
 } from "../core/outcome.ts";
 import { buildCommentBody, postComment } from "./comment.ts";
+import { ensureClaudeBinary } from "./bootstrap.ts";
 import { loadPrContext } from "./context.ts";
 import { choosePushTarget, commitFix, push, remoteHead } from "./deliver.ts";
 
@@ -167,6 +168,8 @@ async function revertWorkingTree() {
   if (created.length) await git(["clean", "-fq", "--", ...created]);
 }
 
+const claudeBinary = await ensureClaudeBinary();
+
 const attempts: AttemptOutcome[] = [];
 const fixedLibraries: string[] = [];
 
@@ -200,6 +203,7 @@ for (const bump of detected) {
       python,
       maxBudgetUsd: remaining,
       maxTurns,
+      pathToClaudeCodeExecutable: claudeBinary ?? undefined,
     });
     attempts.push({
       ...base,

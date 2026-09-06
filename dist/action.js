@@ -1,4 +1,4 @@
-import{createRequire}from'module';const require=createRequire(import.meta.url);
+import{createRequire as __gbCreateRequire}from'module';const require=__gbCreateRequire(import.meta.url);
 
 // src/action/main.ts
 import { appendFile as appendFile2 } from "node:fs/promises";
@@ -32197,7 +32197,8 @@ async function attemptFix(req) {
       maxTurns: req.maxTurns,
       maxBudgetUsd: req.maxBudgetUsd,
       allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "WebFetch"],
-      settingSources: []
+      settingSources: [],
+      ...req.pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable: req.pathToClaudeCodeExecutable } : {}
     }
   });
   try {
@@ -32470,6 +32471,36 @@ async function postComment(token2, repo2, prNumber, body) {
   }
 }
 
+// src/action/bootstrap.ts
+import { existsSync as existsSync2 } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir as tmpdir2 } from "node:os";
+import { dirname as dirname4, join as join6 } from "node:path";
+var SDK_VERSION = "0.3.252";
+var BIN = process.platform === "win32" ? "claude.exe" : "claude";
+async function ensureClaudeBinary() {
+  const pkg = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
+  try {
+    const local = join6(dirname4(createRequire(import.meta.url).resolve(`${pkg}/package.json`)), BIN);
+    if (existsSync2(local)) return local;
+  } catch {
+  }
+  const prefix = join6(process.env.RUNNER_TEMP || tmpdir2(), "greenbump-cli");
+  const binary = join6(prefix, "node_modules", pkg, BIN);
+  if (existsSync2(binary)) return binary;
+  console.log(`greenbump: fetching agent runtime (${pkg}@${SDK_VERSION})\u2026`);
+  const r = await run(
+    "npm",
+    ["install", "--prefix", prefix, "--no-save", "--no-audit", "--no-fund", `${pkg}@${SDK_VERSION}`],
+    { timeoutMs: 3e5 }
+  );
+  if (!r.ok || !existsSync2(binary)) {
+    console.warn(`greenbump: could not fetch agent runtime: ${tail(r.stderr, 3)}`);
+    return null;
+  }
+  return binary;
+}
+
 // src/action/context.ts
 import { readFile as readFile2 } from "node:fs/promises";
 function parsePrContext(eventName, repo2, payload) {
@@ -32658,6 +32689,7 @@ async function revertWorkingTree() {
   const created = [...await untracked()].filter((f) => !baselineUntracked.has(f));
   if (created.length) await git2(["clean", "-fq", "--", ...created]);
 }
+var claudeBinary = await ensureClaudeBinary();
 var attempts = [];
 var fixedLibraries = [];
 for (const bump of detected) {
@@ -32687,7 +32719,8 @@ for (const bump of detected) {
       toVersion: bump.toVersion,
       python,
       maxBudgetUsd: remaining,
-      maxTurns
+      maxTurns,
+      pathToClaudeCodeExecutable: claudeBinary ?? void 0
     });
     attempts.push({
       ...base,
