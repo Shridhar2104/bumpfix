@@ -1,6 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { run } from "./exec.ts";
-import { collectCount, runPytest, type TestResult } from "./pytest.ts";
+import { collectTests, runPytest, type TestResult } from "./pytest.ts";
 
 export type FixRequest = {
   cwd: string;
@@ -29,7 +29,9 @@ export type FixOutcome = {
 };
 
 const TEST_PATH = /(^|\/)(tests?|testing)\//i;
-const TEST_FILE = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py)$/i;
+// pytest.ini and tox.ini count as test files: editing them can deselect or
+// weaken tests without touching a test module.
+const TEST_FILE = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py|pytest\.ini|tox\.ini)$/i;
 
 const isTestFile = (p: string) => TEST_PATH.test(p) || TEST_FILE.test(p);
 
@@ -42,15 +44,17 @@ const ARTIFACT =
   /(^|\/)(__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.tox|node_modules|\.venv|venv|[^/]*\.egg-info)\/|\.py[co]$|(^|\/)\.DS_Store$/i;
 
 /**
- * Everything the agent touched, including files it created. `git diff` alone
+ * Everything currently dirty, including untracked files. `git diff` alone
  * reports only tracked edits, so a new module would be dropped from the commit
- * and the pushed branch would not build.
+ * and the pushed branch would not build. quotepath=off so non-ASCII paths come
+ * back literal instead of octal-escaped (which `git add` cannot match).
  */
-async function changedFiles(cwd: string): Promise<string[]> {
-  const r = await run("git", ["status", "--porcelain", "--untracked-files=all"], {
-    cwd,
-    timeoutMs: 30_000,
-  });
+async function dirtyPaths(cwd: string): Promise<string[]> {
+  const r = await run(
+    "git",
+    ["-c", "core.quotepath=off", "status", "--porcelain", "--untracked-files=all"],
+    { cwd, timeoutMs: 30_000 },
+  );
   return r.stdout
     .split("\n")
     .filter(Boolean)
@@ -130,7 +134,21 @@ export async function attemptFix(req: FixRequest): Promise<FixOutcome> {
   if (!before.ran) return { ...base, fixed: false, reason: "no tests collected — nothing to verify against" };
   if (before.passed) return { ...base, fixed: false, reason: "suite already green — no upgrade breakage to fix" };
 
-  const countBefore = await collectCount(testOpts);
+  const collectedBefore = await collectTests(testOpts);
+
+  // Anything already dirty (install steps, generated files) is not the
+  // agent's work: committing it could push unrelated — even sensitive —
+  // workspace content onto the customer's PR.
+  const preDirty = new Set(await dirtyPaths(req.cwd));
+
+  // The agent gets Bash, so it must not inherit credentials: a push-capable
+  // token in its env would let a confused agent deliver an unverified fix
+  // itself, around every gate below.
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([k]) => k !== "GITHUB_TOKEN" && k !== "GH_TOKEN" && !k.startsWith("INPUT_"),
+    ),
+  ) as Record<string, string>;
 
   let costUsd = 0;
   let turns = 0;
@@ -140,6 +158,7 @@ export async function attemptFix(req: FixRequest): Promise<FixOutcome> {
     prompt: buildPrompt(req, before.output),
     options: {
       cwd: req.cwd,
+      env,
       model: "claude-opus-5",
       permissionMode: "bypassPermissions",
       maxTurns: req.maxTurns,
@@ -159,23 +178,23 @@ export async function attemptFix(req: FixRequest): Promise<FixOutcome> {
     }
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
-    // The SDK throws when the run is cut off at the budget ceiling instead of
-    // yielding a result message. A capped run is a normal outcome here, and it
-    // must report its spend — otherwise the action's shared-budget loop would
-    // hand the next attempt money that is already gone.
+    // The SDK throws when a run is cut off (budget ceiling, transport error)
+    // instead of yielding a result message, and the true spend is unknowable
+    // then. Report the worst case: under-reporting would let the action's
+    // shared-budget loop hand the next attempt money that is already gone.
     const capped = /maximum budget/i.test(msg);
     return {
       ...base,
-      costUsd: capped ? req.maxBudgetUsd : costUsd,
+      costUsd: req.maxBudgetUsd,
       turns,
       fixed: false,
       reason: capped
         ? `budget exhausted ($${req.maxBudgetUsd}) before the suite went green`
-        : `agent run failed: ${msg.slice(0, 200)}`,
+        : `agent run failed (spend unknown, assuming full budget): ${msg.slice(0, 200)}`,
     };
   }
 
-  const filesChanged = await changedFiles(req.cwd);
+  const filesChanged = (await dirtyPaths(req.cwd)).filter((p) => !preDirty.has(p));
   const withCost = { ...base, costUsd, turns, filesChanged };
 
   if (!filesChanged.length) {
@@ -192,20 +211,54 @@ export async function attemptFix(req: FixRequest): Promise<FixOutcome> {
     return { ...withCost, after, fixed: false, reason: `suite still red (${after.counts.failed} failed, ${after.counts.errors} errors)` };
   }
 
-  const countAfter = await collectCount(testOpts);
-  if (countAfter < countBefore) {
+  // Set comparison, not count: an agent could deselect tests via config edits
+  // (`-k`, `--ignore`, addopts) without changing any file the guard above sees.
+  const collectedAfter = await collectTests(testOpts);
+  const missing = [...collectedBefore.ids].filter((id) => !collectedAfter.ids.has(id));
+  const shrunk = collectedBefore.ids.size
+    ? missing.length > 0
+    : collectedAfter.count < collectedBefore.count;
+  if (shrunk) {
     return {
       ...withCost,
       after,
       fixed: false,
-      reason: `rejected — collected tests dropped ${countBefore} → ${countAfter}`,
+      reason: missing.length
+        ? `rejected — tests no longer collected: ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? ` (+${missing.length - 3} more)` : ""}`
+        : `rejected — collected tests dropped ${collectedBefore.count} → ${collectedAfter.count}`,
     };
+  }
+
+  // A "fix" that downgrades the library back to the old major would pass every
+  // gate above; the prompt forbids it, but verify rather than trust.
+  const reverted = await upgradeReverted(req);
+  if (reverted) {
+    return { ...withCost, after, fixed: false, reason: `rejected — ${reverted}` };
   }
 
   return {
     ...withCost,
     after,
     fixed: true,
-    reason: `${after.counts.passed} passed, ${countAfter} collected, ${filesChanged.length} file(s) changed`,
+    reason: `${after.counts.passed} passed, ${collectedAfter.count} collected, ${filesChanged.length} file(s) changed`,
   };
+}
+
+/** Best-effort check that the target library still sits at the new major. */
+async function upgradeReverted(req: FixRequest): Promise<string | null> {
+  const wantMajor = Number(req.toVersion?.match(/^v?(\d+)/)?.[1] ?? NaN);
+  const fromMajor = Number(req.fromVersion?.match(/^v?(\d+)/)?.[1] ?? NaN);
+  if (!Number.isFinite(wantMajor) && !Number.isFinite(fromMajor)) return null;
+
+  const r = await run(
+    req.python ?? "python",
+    ["-c", `import importlib.metadata as m; print(m.version(${JSON.stringify(req.library)}))`],
+    { cwd: req.cwd, timeoutMs: 30_000 },
+  );
+  const installed = r.stdout.trim();
+  const major = Number(installed.match(/^v?(\d+)/)?.[1] ?? NaN);
+  if (!r.ok || !Number.isFinite(major)) return null;
+
+  const tooOld = Number.isFinite(wantMajor) ? major < wantMajor : major <= fromMajor;
+  return tooOld ? `${req.library} is at ${installed} — the upgrade was reverted, not fixed` : null;
 }

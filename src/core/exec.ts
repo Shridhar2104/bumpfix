@@ -31,12 +31,15 @@ export function run(
         env: { ...process.env, ...opts.env },
       },
       (err, stdout, stderr) => {
-        const e = err as (Error & { code?: number; killed?: boolean }) | null;
+        const e = err as (Error & { code?: number | string; killed?: boolean }) | null;
+        // A string code (ENOENT, EACCES) means the command never ran at all —
+        // callers must not read that as "ran and failed" (exit 1).
+        const spawnFailed = typeof e?.code === "string";
         resolve({
           ok: !e,
-          code: typeof e?.code === "number" ? e.code : e ? 1 : 0,
+          code: typeof e?.code === "number" ? e.code : spawnFailed ? null : e ? 1 : 0,
           stdout: stdout ?? "",
-          stderr: stderr ?? "",
+          stderr: (stderr ?? "") || (spawnFailed ? e!.message : ""),
           timedOut: Boolean(e?.killed),
           ms: Date.now() - started,
         });

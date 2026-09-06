@@ -101,3 +101,52 @@ test("a downgrade is not a bump", () => {
   const bumps = detectMajorBumps(diff("requirements.txt", "-pydantic==2.9.2\n+pydantic==1.10.13\n"));
   assert.deepEqual(bumps, []);
 });
+
+test("reads a real pretty-printed Pipfile.lock (name and version on separate lines)", () => {
+  const body =
+    '         "pydantic": {\n' +
+    '             "hashes": [\n' +
+    '-                "sha256:aaa"\n' +
+    '+                "sha256:bbb"\n' +
+    "             ],\n" +
+    '             "index": "pypi",\n' +
+    '-            "version": "==1.10.13"\n' +
+    '+            "version": "==2.9.2"\n' +
+    "         },\n";
+  const bumps = detectMajorBumps(diff("Pipfile.lock", body));
+  assert.deepEqual(bumps, [
+    { library: "pydantic", fromVersion: "1.10.13", toVersion: "2.9.2", manifest: "Pipfile.lock" },
+  ]);
+});
+
+test("Pipfile.lock section and meta objects never become packages", () => {
+  const body =
+    '     "_meta": {\n' +
+    '         "requires": {\n' +
+    '-            "python_version": "3.10"\n' +
+    '+            "python_version": "3.11"\n' +
+    "         }\n" +
+    "     },\n" +
+    '     "default": {\n';
+  assert.deepEqual(detectMajorBumps(diff("Pipfile.lock", body)), []);
+});
+
+test("detects a bump when the old manifest was deleted and a new one added", () => {
+  const d =
+    "diff --git a/requirements.txt b/requirements.txt\n" +
+    "--- a/requirements.txt\n" +
+    "+++ /dev/null\n" +
+    "@@ -1,2 +0,0 @@\n" +
+    "-flask==2.0.1\n" +
+    "-pydantic==1.10.13\n" +
+    "diff --git a/pyproject.toml b/pyproject.toml\n" +
+    "--- /dev/null\n" +
+    "+++ b/pyproject.toml\n" +
+    "@@ -0,0 +1,2 @@\n" +
+    '+pydantic = "^2.9"\n';
+  const bumps = detectMajorBumps(d);
+  assert.equal(bumps.length, 1);
+  assert.equal(bumps[0].library, "pydantic");
+  assert.equal(bumps[0].fromVersion, "1.10.13");
+  assert.equal(bumps[0].toVersion, "2.9");
+});

@@ -51,6 +51,13 @@ secrets. Use `pull_request` as shown above.
 does not re-trigger workflow runs — that's a GitHub anti-recursion guard, not
 a bug. After greenbump comments, re-run the failed checks manually, or set
 `github-token` to a PAT or GitHub App token to have them rerun automatically.
+(If you pass a PAT, pass it via the `github-token` input — it takes precedence
+over any ambient `GITHUB_TOKEN` env var.)
+
+**Fork PRs:** gate the job with
+`if: github.event.pull_request.head.repo.full_name == github.repository`
+(as in the example workflow). Fork PRs can't read your secrets, and the
+`head_ref` checkout only exists for same-repo branches — Dependabot's included.
 
 ## Results
 

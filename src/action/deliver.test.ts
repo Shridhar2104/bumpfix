@@ -38,3 +38,32 @@ test("falls back when the remote head is unreadable", () => {
   const plan = choosePushTarget({ pr, checkoutSha: "aaa111", remoteHeadSha: null, fallbackBranch: "gb/x" });
   assert.equal(plan.mode, "fix-branch");
 });
+
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { commitFix } from "./deliver.ts";
+
+test("commitFix stages root-relative paths even when cwd is a subdirectory", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "gb-test-"));
+  const sh = (args: string[]) => execFileSync("git", args, { cwd: dir });
+  try {
+    sh(["init", "-q", "--initial-branch=main"]);
+    sh(["config", "user.email", "t@t"]);
+    sh(["config", "user.name", "t"]);
+    mkdirSync(join(dir, "backend/app"), { recursive: true });
+    writeFileSync(join(dir, "backend/app/models.py"), "x\n");
+    sh(["add", "-A"]);
+    sh(["commit", "-qm", "init"]);
+    writeFileSync(join(dir, "backend/app/models.py"), "y\n");
+
+    // cwd is the subdir; the path is repo-root-relative, as git status emits it.
+    const ok = await commitFix(join(dir, "backend"), ["backend/app/models.py"], "fix");
+    assert.equal(ok, true);
+    const subject = execFileSync("git", ["log", "-1", "--format=%s"], { cwd: dir }).toString().trim();
+    assert.equal(subject, "fix");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

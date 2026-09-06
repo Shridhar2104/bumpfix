@@ -41,10 +41,15 @@ export function choosePushTarget(opts: {
 const git = (cwd: string, args: string[]) => run("git", args, { cwd, timeoutMs: 120_000 });
 
 export async function commitFix(cwd: string, files: string[], message: string): Promise<boolean> {
-  await git(cwd, ["config", "user.name", "greenbump"]);
-  await git(cwd, ["config", "user.email", "bot@greenbump.dev"]);
-  await git(cwd, ["add", "--", ...files]);
-  const r = await git(cwd, ["commit", "-m", message]);
+  // `git status --porcelain` paths are repo-root-relative; when the action's
+  // working-directory is a subdirectory, staging them from `cwd` would look
+  // for e.g. backend/backend/app.py and silently lose the fix.
+  const top = await git(cwd, ["rev-parse", "--show-toplevel"]);
+  const root = top.stdout.trim() || cwd;
+  await git(root, ["config", "user.name", "greenbump"]);
+  await git(root, ["config", "user.email", "bot@greenbump.dev"]);
+  await git(root, ["add", "--", ...files]);
+  const r = await git(root, ["commit", "-m", message]);
   return r.ok;
 }
 

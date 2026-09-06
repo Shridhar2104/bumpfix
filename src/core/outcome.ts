@@ -48,13 +48,18 @@ export const totalCost = (attempts: AttemptOutcome[]) =>
 
 /** Write the record where CI can pick it up, and expose it as step outputs. */
 export async function writeOutcomeFile(record: OutcomeRecord): Promise<string> {
-  const path = join(process.env.RUNNER_TEMP || tmpdir(), "greenbump-outcome.json");
-  await writeFile(path, JSON.stringify(record, null, 2) + "\n");
+  // `fixed` goes out first and on its own: a full RUNNER_TEMP must not also
+  // cost downstream steps the one output they gate on.
   if (process.env.GITHUB_OUTPUT) {
     await appendFile(
       process.env.GITHUB_OUTPUT,
-      `outcome-file=${path}\nfixed=${record.attempts.some((a) => a.fixed)}\n`,
-    );
+      `fixed=${record.attempts.some((a) => a.fixed)}\n`,
+    ).catch(() => {});
+  }
+  const path = join(process.env.RUNNER_TEMP || tmpdir(), "greenbump-outcome.json");
+  await writeFile(path, JSON.stringify(record, null, 2) + "\n");
+  if (process.env.GITHUB_OUTPUT) {
+    await appendFile(process.env.GITHUB_OUTPUT, `outcome-file=${path}\n`);
   }
   return path;
 }

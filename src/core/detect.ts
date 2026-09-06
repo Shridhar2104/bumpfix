@@ -27,8 +27,20 @@ const LOCKFILE = /(^|\/)(poetry\.lock|uv\.lock)$/;
 /** PEP 503 normalisation so pydantic_settings and pydantic-settings dedupe. */
 const norm = (name: string) => name.toLowerCase().replace(/[-_.]+/g, "-");
 
-/** Keys that look like dependencies but never are. */
-const IGNORE = new Set(["version", "python", "python-version", "python-full-version", "name"]);
+/** Keys that look like dependencies but never are. The second row is
+ *  Pipfile.lock structure: section and metadata objects whose `"x": {` lines
+ *  would otherwise be mistaken for package context. */
+const IGNORE = new Set([
+  "version", "python", "python-version", "python-full-version", "name",
+  "default", "develop", "-meta", "sources", "requires", "hash", "hashes", "markers", "extras",
+]);
+
+/** Pipfile.lock is pretty-printed JSON: `"pydantic": {` and `"version": "==2.9.2"`
+ *  are always on separate lines, so it needs the same context tracking as the
+ *  TOML lockfiles, with JSON-shaped line patterns. */
+const PIPFILE_LOCK = /(^|\/)Pipfile\.lock$/;
+const JSON_NAME = /^"([A-Za-z0-9._-]+)":\s*\{/;
+const JSON_VERSION = /^"version":\s*"==?v?(\d+(?:\.\d+)*)"/;
 
 const major = (v: string): number | null => {
   const m = v.match(/^v?(\d+)/);
@@ -55,8 +67,10 @@ type Sides = { removed?: string; added?: string; manifest: string; display: stri
 export function detectMajorBumps(diff: string): DetectedBump[] {
   const byPkg = new Map<string, Sides>();
   let file = "";
+  let oldFile = "";
   let inManifest = false;
   let inLockfile = false;
+  let inPipfileLock = false;
   /** Package the current lockfile lines belong to, set by name= lines. */
   let lockContext = "";
 
@@ -72,23 +86,36 @@ export function detectMajorBumps(diff: string): DetectedBump[] {
   };
 
   for (const raw of diff.split("\n")) {
+    if (raw.startsWith("--- ")) {
+      oldFile = raw.replace(/^--- (a\/)?/, "").trim();
+      continue;
+    }
     if (raw.startsWith("+++ ")) {
-      file = raw.replace(/^\+\+\+ (b\/)?/, "").trim();
+      // A deleted manifest has "+++ /dev/null"; its removed lines still carry
+      // the old versions (e.g. requirements.txt → pyproject.toml migrations),
+      // so fall back to the "---" side for the file identity.
+      const newFile = raw.replace(/^\+\+\+ (b\/)?/, "").trim();
+      file = newFile !== "/dev/null" ? newFile : oldFile;
       inManifest = file !== "/dev/null" && MANIFEST.test(file);
       inLockfile = inManifest && LOCKFILE.test(file);
+      inPipfileLock = inManifest && PIPFILE_LOCK.test(file);
       lockContext = "";
       continue;
     }
-    if (raw.startsWith("--- ") || !inManifest) continue;
+    if (!inManifest) continue;
 
     const sign = raw[0];
     if (sign !== "+" && sign !== "-" && sign !== " ") continue;
     const line = raw.slice(1).trim();
 
-    // name= lines set lockfile context whether changed or not — lockfile only,
+    // name lines set lockfile context whether changed or not — lockfiles only,
     // else a `name = "myproject"` line in pyproject.toml would attribute the
     // project's own version bump to a fake "dependency" named after itself.
-    const name = inLockfile ? line.match(LOCK_NAME) : null;
+    const name = inLockfile
+      ? line.match(LOCK_NAME)
+      : inPipfileLock && !JSON_DEP_LINE.test(line)
+        ? line.match(JSON_NAME)
+        : null;
     if (name) {
       lockContext = name[1];
       continue;
@@ -96,7 +123,11 @@ export function detectMajorBumps(diff: string): DetectedBump[] {
     if (sign === " ") continue;
 
     const side = sign === "-" ? "removed" : "added";
-    const lockVer = inLockfile ? line.match(LOCK_VERSION) : null;
+    const lockVer = inLockfile
+      ? line.match(LOCK_VERSION)
+      : inPipfileLock
+        ? line.match(JSON_VERSION)
+        : null;
     if (lockVer && lockContext) {
       record(lockContext, lockVer[1], side);
       continue;
