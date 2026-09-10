@@ -7,6 +7,8 @@ Dependabot opens a PR bumping `pydantic` to v2. Your suite goes red. A few
 minutes later a commit lands on that same PR migrating your code to the new
 API, ready for your checks to rerun green. That's the whole product.
 
+![bumpfix fixing a real pydantic v1→v2 bump PR in CI](https://github.com/Shridhar2104/bumpfix/releases/download/v1/bumpfix-demo.gif)
+
 **See it on a real PR:** [bumpfix-demo#1](https://github.com/Shridhar2104/bumpfix-demo/pull/1)
 — a pydantic 1.10 → 2.9 bump turns the suite red, and bumpfix's commit
 migrates two source files (`@validator` → `@field_validator`, `const=` →
@@ -44,6 +46,11 @@ Add `.github/workflows/bumpfix.yml` — see [examples/workflow.yml](examples/wor
   on the PR; without it bumpfix falls back to pushing a separate branch)
 - your usual dependency install step
 - the action, with `ANTHROPIC_API_KEY` in secrets
+
+**No API key? Use your Claude subscription** (your own repos only): run
+`claude setup-token` once, store the token as a `CLAUDE_CODE_OAUTH_TOKEN`
+secret, and pass that env var to the action instead of `ANTHROPIC_API_KEY`.
+Fixes then draw on your Claude plan's usage instead of API credits.
 
 **Dependabot note:** workflows triggered by Dependabot PRs read secrets from
 *Dependabot secrets*, not Actions secrets. Add `ANTHROPIC_API_KEY` under
